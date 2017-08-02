@@ -61,6 +61,8 @@ To do:
     - fix raise weewx.restx.FailedPost in mqtt_post_data - maybe already fixed?
     - add TLS defaults as per Paho client
     - finish documenting TLS options
+    - do Buffer, ScalarBuffer and VectorBuffer need to keep a MAX_AGE history?
+      Should it be just Buffer of just the other? Seems to be duplication.
 """
 
 
@@ -81,32 +83,6 @@ import weewx
 import weewx.units
 
 from weewx.units import ValueTuple, convert
-
-
-# ordinal compass points supported
-COMPASS_POINTS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
-                  'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW', 'N']
-
-# the obs that we will buffer
-MANIFEST = ['outTemp', 'barometer', 'outHumidity', 'rain', 'rainRate',
-            'humidex', 'windchill', 'heatindex', 'windSpeed', 'inTemp',
-            'appTemp', 'dewpoint', 'windDir', 'UV', 'radiation', 'wind',
-            'windGust', 'windGustDir']
-# obs for which we need hi/lo data
-HILO_MANIFEST = ['outTemp', 'barometer', 'outHumidity',
-                 'humidex', 'windchill', 'heatindex', 'windSpeed', 'inTemp',
-                 'appTemp', 'dewpoint', 'UV', 'radiation', 'windGust',
-                 'windGustDir']
-# obs for which we need a history
-HIST_MANIFEST = ['windSpeed', 'windDir', 'wind']
-# obs for which we need a running sum
-SUM_MANIFEST = ['rain', 'wind']
-MAX_AGE = 600
-DEFAULT_MAX_CACHE_AGE = 600
-DEFAULT_AVGSPEED_PERIOD = 300
-DEFAULT_GUST_PERIOD = 300
-DEFAULT_GRACE = 200
-DEFAULT_TREND_PERIOD = 3600
 
 
 def logmsg(level, msg):
@@ -164,53 +140,70 @@ class MQTTPublish(object):
 
     Based upon the weeWX MQTT uploader by Matthew Wall.
 
-    This class supports publishing  free form data to a MQTT broker using the
+    This class supports publishing free form data to a MQTT broker using the
     Paho client with optional TLS support. An MQTTPublish object has a single
     method, publish(), that will publish the data concerned to the MQTT broker
-    defined by the object. A MQTTPublish object accepts the following
-    parameters on creation:
+    defined by the object.
 
-    server:      Server URL to be used in the format:
+    MQTTPublish constructor parameters:
 
-                 mqtt://user:password@address:port/
+        server:      Server URL to be used. String in the format:
 
-                 where:
-                     user:     The MQTT user name to be used.
-                     password: The password for the MQTT user.
-                     address:  The address or resolvable name of the MQTT
-                               server. Note that if using TLS the this setting
-                               may need to match the server name on the
-                               certificate used by the server.
-                     port:     The port number on which the mQTT server is
-                               listening.
+                     mqtt://user:password@address:port/
 
-    tls:         TLS config options. MQTTPublish supports the following TLS options:
+                     where:
+                        user:     The MQTT user name to be used.
+                        password: The password for the MQTT user.
+                        address:  The address or resolvable name of the MQTT
+                                  server. Note that if using TLS the this
+                                  setting may need to match the server name on
+                                  the certificate used by the server.
+                        port:     The port number on which the mQTT server is
+                                  listening.
 
-                 ca_certs:    Path to the trusted Certificate Authority
-                              certificate files. String.
-                 certfile:    Path to PEM encoded client certificate. String.
-                 keyfile:     Path to private keys. String.
-                 cert_reqs:   Certificate requirements imposed on the broker.
-                              String, available options are 'none', 'optional'
-                              or 'required'. Default is 'requried'.
-                 tls_version: SSL/TLS protocol version to be used. to be used
-                 ciphers:     Which encryption ciphers are allowable for this
-                              connection. String, default is to use the default
-                              encryption ciphers.
+        tls:         TLS config options. Dictionary with one or more of the
+                     following keys:
 
-    retain:      Whether the published data will be set as the
-                 "last known good"/retained message for the topic. Boolean,
-                 default is False.
-    max_tries:   Maximum number of attempts to publish data before giving up.
-                 Integer, default is 3.
-    retry_wait:  Time in seconds to wait between retries. Float, default
-                 is 0.5.
-    log_success: Whether to log successful publication or not. Boolean, default
-                 is False.
+                     ca_certs:    Path to the trusted Certificate Authority
+                                  certificate files. String.
+                     certfile:    Path to PEM encoded client certificate.
+                                  String.
+                     keyfile:     Path to private keys. String.
+                     cert_reqs:   Certificate requirements imposed on the
+                                  broker. String, available options are 'none',
+                                  'optional' or 'required'. Default is
+                                  'required'.
+                     tls_version: SSL/TLS protocol version to be used. String,
+                                  supported options depend on the local OpenSSL
+                                  install. Available (dependent on OpenSSL)
+                                  options are:
+                                      SSLV1
+                                      SSLV2
+                                      SSLV3
+                                      SSLV23
+                                      TLS
+                                      TLSV1
+                     ciphers:     Which encryption ciphers are allowable for
+                                  this connection. String, default is to use
+                                  the default encryption ciphers.
+
+        retain:      Whether the published data will be set as the
+                     "last known good"/retained message for the topic. Boolean,
+                     default is False.
+        max_tries:   Maximum number of attempts to publish data before giving
+                     up. Integer, default is 3.
+        retry_wait:  Time in seconds to wait between retries. Float, default
+                     is 0.5.
+        log_success: Whether to log successful publication or not. Boolean,
+                     default is False.
+
+    MQTTPublish methods:
+
+        publish. Publish data to a MQTT broker.
     """
 
-    # Define a number of options used in setting the Paho client to use TLS.
-    # These options may need to change as Paho evolves.
+    # Define available options used in setting the Paho client to use TLS.
+    # These options may need to change as/if Paho evolves.
 
     # TLS options accepted by Paho
     TLS_OPTIONS = [
@@ -219,9 +212,9 @@ class MQTTPublish(object):
         ]
     # map for TLS cert request options accepted by Paho
     CERT_REQ_OPTIONS = {
-        'none': ssl.CERT_NONE,
-        'optional': ssl.CERT_OPTIONAL,
-        'required': ssl.CERT_REQUIRED
+        'NONE': ssl.CERT_NONE,
+        'OPTIONAL': ssl.CERT_OPTIONAL,
+        'REQUIRED': ssl.CERT_REQUIRED
         }
     # Map for TLS version options accepted by Paho. Some options are dependent
     # on the local OpenSSL install so use try..except for some options.
@@ -257,13 +250,22 @@ class MQTTPublish(object):
             # we have TLS options so construct a dict to configure Paho TLS
             for opt in tls:
                 if opt == 'cert_reqs':
-                    if tls[opt] in self.CERT_REQ_OPTIONS:
-                        self.tls_dict[opt] = self.CERT_REQ_OPTIONS.get(tls[opt])
+                    if tls[opt].upper() in self.CERT_REQ_OPTIONS:
+                        self.tls_dict[opt] = self.CERT_REQ_OPTIONS.get(tls[opt].upper())
+                    else:
+                        logdbg("mqttpublish",
+                               "Unknown option, ignoring cert_reqs option '%s'" % tls[opt])
                 elif opt == 'tls_version':
-                    if tls[opt] in self.TLS_VER_OPTIONS:
-                        self.tls_dict[opt] = self.TLS_VER_OPTIONS.get(tls[opt])
+                    if tls[opt].upper() in self.TLS_VER_OPTIONS:
+                        self.tls_dict[opt] = self.TLS_VER_OPTIONS.get(tls[opt].upper())
+                    else:
+                        logdbg("mqttpublish",
+                               "Unknown option, ignoring tls_version option '%s'" % tls[opt])
                 elif opt in self.TLS_OPTIONS:
                     self.tls_dict[opt] = tls[opt]
+                else:
+                    logdbg("mqttpublish", "Unknown TLS option '%s'" % opt)
+
             logdbg("mqttpublish", "TLS parameters: %s" % self.tls_dict)
         # whether the published data is to be retained by the broker
         self.retain = retain
@@ -277,11 +279,11 @@ class MQTTPublish(object):
     def publish(self, topic, data, identifier):
         """Publish data to a MQTT broker.
 
-        This code is modelled on the weeWX MQTT extension.
+        Publishes data to topic. Publish failures (socket.error, socket.timeout
+        and socket.herror) that trigger a retry are logged. If publication
+        fails after self.max_tries attempts a FailedPost exception is raised.
 
-        The data to be posted is sent as a JSON string.
-
-        Inputs:
+        Parameters:
             topic:      the topic to which the data is to be published
             data:       the data to be published
             identifier: an identifier (eg timestamp) used to identify a
@@ -346,14 +348,20 @@ class MQTTPublish(object):
 
 
 class WeatherUndergroundAPI(object):
-    """Class to query the Weather Underground API.
+    """Query the Weather Underground API and return the API response.
 
     The WU API is accessed by calling one or more features. These features can
     be grouped into two groups, WunderMap layers and data features. This class
     supports access to the API data features only.
 
-    A WeatherUndergroundAPI object can be created with just a WU API key. One
-    or more data features can then be access using the data_request method.
+    WeatherUndergroundAPI constructor parameters:
+
+        api_key: WeatherUnderground API key to be used.
+
+    WeatherUndergroundAPI methods:
+
+        data_request. Submit a data feature request to the WeatherUnderground
+                      API and return the response.
     """
 
     BASE_URL = 'http://api.wunderground.com/api'
@@ -365,11 +373,11 @@ class WeatherUndergroundAPI(object):
         self.api_key = api_key
 
     def data_request(self, features, query, settings=None, format='json', max_tries=3):
-        """Make a data feature request via teh API and return the results.
+        """Make a data feature request via the API and return the results.
 
         Construct an API call URL, make the call and return the response.
 
-        Inputs:
+        Parameters:
             features:  One or more WU API data features. String or list/tuple
                        of strings.
             query:     The location for which the information is sought. Refer
@@ -450,7 +458,7 @@ class WeatherUndergroundAPI(object):
 
 
 class Buffer(dict):
-    """Class to buffer various loop packet obs.
+    """Buffer loop packet obs to facilitate limited loop aggregates.
 
     Archive based stats are an efficient means of obtaining stats for today.
     However, their use ignores any max/min etc (eg today's max outTemp) that
@@ -469,23 +477,63 @@ class Buffer(dict):
     windSpeed in last minute'. These histories are based on a moving window of
     a given period eg 10 minutes and are updated each time a looppacket is
     received.
+
+    Buffer constructor parameters:
+
+        day_stats:            An Accumulator (accum.Accumulator) object from
+                              the main weeWX database initialised with todays
+                              stats
+        additional_day_stats: An Accumulator (accum.Accumulator) object from an
+                              additional weeWX database initialised with todays
+                              stats
+
+    Buffer methods:
+
+        seed_scalar.        Seed a ScalarBuffer object with today's stats.
+        seed_vector.        Seed a VectorBuffer object with today's stats.
+        seed_windrun.       Seed the windrun property with the day's windrun so
+                            far.
+        add_packet.         Add a packet to the buffer.
+        add_value.          Add a scalar observation to the buffer.
+        add_wind_value.     Add wind data to the buffer.
+        clean.              Remove any outdated obs from the buffer history
+                            list.
+        start_of_day_reset. Reset the buffer stats.
+        nineam_reset.       Reset any '9am based' stats in the buffer.
     """
+
+    # the obs that we will buffer
+    MANIFEST = ['outTemp', 'barometer', 'outHumidity', 'rain', 'rainRate',
+                'humidex', 'windchill', 'heatindex', 'windSpeed', 'inTemp',
+                'appTemp', 'dewpoint', 'windDir', 'UV', 'radiation', 'wind',
+                'windGust', 'windGustDir']
+    # obs for which we need hi/lo data
+    HILO_MANIFEST = ['outTemp', 'barometer', 'outHumidity',
+                     'humidex', 'windchill', 'heatindex', 'windSpeed', 'inTemp',
+                     'appTemp', 'dewpoint', 'UV', 'radiation', 'windGust',
+                     'windGustDir']
+    # obs for which we need a history
+    HIST_MANIFEST = ['windSpeed', 'windDir', 'wind']
+    # obs for which we need a running sum
+    SUM_MANIFEST = ['rain', 'wind']
+    # maximum time (seonds) to keep an obs value
+    MAX_AGE = 600
 
     def __init__(self, day_stats, additional_day_stats=None):
         """Initialise an instance of our class."""
 
         # seed our buffer objects from day_stats
-        for obs in [f for f in day_stats if f in MANIFEST]:
+        for obs in [f for f in day_stats if f in self.MANIFEST]:
             seed_func = seed_functions.get(obs, Buffer.seed_scalar)
-            seed_func(self, day_stats, obs, obs in HIST_MANIFEST,
-                      obs in SUM_MANIFEST)
+            seed_func(self, day_stats, obs, obs in self.HIST_MANIFEST,
+                      obs in self.SUM_MANIFEST)
         # seed our buffer objects from additional_day_stats
         if additional_day_stats:
-            for obs in [f for f in additional_day_stats if f in MANIFEST]:
+            for obs in [f for f in additional_day_stats if f in self.MANIFEST]:
                 if obs not in self:
                     seed_func = seed_functions.get(obs, Buffer.seed_scalar)
                     seed_func(self, additional_day_stats, obs,
-                              obs in HIST_MANIFEST, obs in SUM_MANIFEST)
+                              obs in self.HIST_MANIFEST, obs in self.SUM_MANIFEST)
         self.primary_unit_system = day_stats.unit_system
         self.last_windSpeed_ts = None
         self.windrun = self.seed_windrun(day_stats)
@@ -537,10 +585,10 @@ class Buffer(dict):
 
 #        packet = weewx.units.to_std_system(packet, self.primary_unit_system)
         if packet['dateTime'] is not None:
-            for obs in [f for f in packet if f in MANIFEST]:
+            for obs in [f for f in packet if f in self.MANIFEST]:
                 add_func = add_functions.get(obs, Buffer.add_value)
-                add_func(self, packet, obs, obs in HILO_MANIFEST,
-                         obs in HIST_MANIFEST, obs in SUM_MANIFEST)
+                add_func(self, packet, obs, obs in self.HILO_MANIFEST,
+                         obs in self.HIST_MANIFEST, obs in self.SUM_MANIFEST)
 
     def add_value(self, packet, obs, hilo, hist, sum):
         """Add a value to the buffer."""
@@ -590,10 +638,10 @@ class Buffer(dict):
     def clean(self, ts):
         """Clean out any old obs from the buffer history."""
 
-        for obs in HIST_MANIFEST:
+        for obs in self.HIST_MANIFEST:
             self[obs]['history_full'] = min([a.ts for a in self[obs]['history'] if a.ts is not None]) <= old_ts
             # calc ts of oldest sample we want to retain
-            oldest_ts = ts - MAX_AGE
+            oldest_ts = ts - self.MAX_AGE
             # remove any values older than oldest_ts
             self[obs]['history'] = [s for s in self[obs]['history'] if s.ts > oldest_ts]
 
@@ -604,7 +652,7 @@ class Buffer(dict):
         kept longer than the end of the archive period.
         """
 
-        for obs in MANIFEST:
+        for obs in self.MANIFEST:
             self[obs].day_reset()
 
     def nineam_reset(self):
@@ -624,7 +672,39 @@ class Buffer(dict):
 
 
 class VectorBuffer(object):
-    """Class to buffer vector obs."""
+    """Class to buffer vector type loop data.
+
+    Buffer constructor parameters:
+
+        stats:   The Accumulator object fields for today for the obs type
+                 concerned.
+
+        units:   WeeWX unit system code for the units used in this VectorBuffer
+                 object. Default is None.
+
+        history: Whether to keep a history for this obs. Boolean, default is
+                 False.
+
+        sum:     Whether to record 'sum' stats for the obs concerned. Boolean,
+                 default is False.
+
+    Buffer methods:
+
+        add_value.       Add a vector value to the buffer.
+        day_reset.       Reset the day stats for the obs concerned.
+        nineam_reset.    Reset the 9am sum.
+###        interval_reset.  What does this really do ?
+        trim_history.    Trim any too old obs from the obs history.
+        history_max.     Calculate the maximum value in the history data.
+        history_avg.     Calculate the average of the value in the history
+                         data.
+        history_vec_avg. Calculate the vector average of the history data for
+                         the obs concerned.
+        day_vec_avg.     Calculate the day vector average value for the obs
+                         concerend.
+        day_vec_dir.     Calculate the day vector avereage direction for the
+                         obs concerend.
+    """
 
     default_init = (None, None, None, None, None)
 
@@ -712,13 +792,13 @@ class VectorBuffer(object):
         """Trim an old data from the history list."""
 
         # calc ts of oldest sample we want to retain
-        oldest_ts = ts - MAX_AGE
+        oldest_ts = ts - Buffer.MAX_AGE
         # set history_full
         self.history_full = min([a.ts for a in self.history if a.ts is not None]) <= oldest_ts
         # remove any values older than oldest_ts
         self.history = [s for s in self.history if s.ts > oldest_ts]
 
-    def history_max(self, ts, age=MAX_AGE):
+    def history_max(self, ts, age=Buffer.MAX_AGE):
         """Return the max value in my history.
 
         Search the last age seconds of my history for the max value and the
@@ -742,7 +822,7 @@ class VectorBuffer(object):
         else:
             return None
 
-    def history_avg(self, ts, age=MAX_AGE):
+    def history_avg(self, ts, age=Buffer.MAX_AGE):
         """Return the average value in my history.
 
         Search the last age seconds of my history for the max value and the
@@ -765,7 +845,7 @@ class VectorBuffer(object):
         else:
             return None
 
-    def history_vec_avg(self, ts, age=MAX_AGE):
+    def history_vec_avg(self, ts, age=Buffer.MAX_AGE):
         """Return the my history vector average."""
 
         born = ts - age
@@ -806,7 +886,33 @@ class VectorBuffer(object):
 
 
 class ScalarBuffer(object):
-    """Class to buffer scalar obs."""
+    """Class to buffer scalar type loop data.
+
+    Buffer constructor parameters:
+
+        stats:   The Accumulator object fields for today for the obs type
+                 concerned.
+
+        units:   WeeWX unit system code for the units used in this ScalarBuffer
+                 object. Default is None.
+
+        history: Whether to keep a history for this obs. Boolean, default is
+                 False.
+
+        sum:     Whether to record 'sum' stats for the obs concerned. Boolean,
+                 default is False.
+
+    Buffer methods:
+
+        add_value.       Add a scalar value to the buffer.
+        day_reset.       Reset the day stats for the obs concerned.
+        nineam_reset.    Reset the 9am sum.
+###        interval_reset.  What does this really do ?
+        trim_history.    Trim any too old obs from the obs history.
+        history_max.     Calculate the maximum value in the history data.
+        history_avg.     Calculate the average of the value in the history
+                         data.
+    """
 
     default_init = (None, None, None, None)
 
@@ -821,7 +927,7 @@ class ScalarBuffer(object):
             self.day_maxtime = stats.maxtime
         else:
             (self.day_min, self.day_mintime,
-             self.day_max, self.day_maxtime) = ScalarBuffer.default_init
+             self.day_max, self.day_maxtime) = self.default_init
         if history:
             self.history = []
             self.history_full = False
@@ -859,7 +965,7 @@ class ScalarBuffer(object):
         """Reset the scalar obs buffer."""
 
         (self.day_min, self.day_mintime,
-         self.day_max, self.day_maxtime) = ScalarBuffer.default_init
+         self.day_max, self.day_maxtime) = self.default_init
         try:
             self.day_sum = 0.0
         except AttributeError:
@@ -879,13 +985,13 @@ class ScalarBuffer(object):
         """Trim an old data from the history list."""
 
         # calc ts of oldest sample we want to retain
-        oldest_ts = ts - MAX_AGE
+        oldest_ts = ts - Buffer.MAX_AGE
         # set history_full
         self.history_full = min([a.ts for a in self.history if a.ts is not None]) <= oldest_ts
         # remove any values older than oldest_ts
         self.history = [s for s in self.history if s.ts > oldest_ts]
 
-    def history_max(self, ts, age=MAX_AGE):
+    def history_max(self, ts, age=Buffer.MAX_AGE):
         """Return the max value in my history.
 
         Search the last age seconds of my history for the max value and the
@@ -908,7 +1014,7 @@ class ScalarBuffer(object):
         else:
             return None
 
-    def history_avg(self, ts, age=MAX_AGE):
+    def history_avg(self, ts, age=Buffer.MAX_AGE):
         """Return my average."""
 
         if len(self.history) > 0:
@@ -923,6 +1029,7 @@ class ScalarBuffer(object):
 #                            Configuration dictionaries
 # ============================================================================
 
+# various config dictionaries used by the Buffer classes
 init_dict = weewx.units.ListOfDicts({'wind': VectorBuffer})
 add_functions = weewx.units.ListOfDicts({'windSpeed': Buffer.add_wind_value})
 seed_functions = weewx.units.ListOfDicts({'wind': Buffer.seed_vector})
@@ -933,22 +1040,36 @@ seed_functions = weewx.units.ListOfDicts({'wind': Buffer.seed_vector})
 # ============================================================================
 
 
-# A observation during some period can be represented by the value of the
-# observation and the time at which it was observed. This can be represented
-# in a 2 way tuple called an obs tuple. An obs tuple is useful because its
-# contents can be accessed using named attributes.
-#
-# Item   attribute   Meaning
-#    0    value      The observed value eg 19.5
-#    1    ts         The epoch timestamp that the value was observed
-#                    eg 1488245400
-#
-# It is valid to have an observed value of None.
-#
-# It is also valid to have a ts of None (meaning there is no information about
-# the time the was was observed.
-
 class ObsTuple(tuple):
+    """Class to represent an observation in time.
+
+    A observation during some period can be represented by the value of the
+    observation and the time at which it was observed. This can be represented
+    in a 2 way tuple called an obs tuple. An obs tuple is useful because its
+    contents can be accessed using named attributes.
+
+    Item    attribute   Meaning
+      0       value     The observed value eg 19.5
+      1       ts        The epoch timestamp that the value was observed
+                        eg 1488245400
+
+    It is valid to have an observed value of None.
+
+    It is also valid to have a ts of None (meaning there is no information
+    about the time the was was observed.
+
+    ObsTuple constructor parameters:
+
+        *args: A (minimum) two-way tuple where the first element is the obs
+               value (may be a tuple for a vector obs) and the second element
+               is the epoch timesdtamp of the observation. Any other elements
+               will be stored in the Obstuple object but not used in the class.
+
+    ObsTuple properties:
+
+        value. The observation value.
+        ts.    The epoch timestamp the observation was made.
+    """
 
     def __new__(cls, *args):
         return tuple.__new__(cls, args)
@@ -968,7 +1089,7 @@ class ObsTuple(tuple):
 
 
 class CachedPacket():
-    """Class to cache loop packets.
+    """Class to cache loop packet data.
 
     The purpose of the cache is to ensure that necessary fields for the
     generation of the JSON data are continuously available on systems whose
@@ -984,6 +1105,17 @@ class CachedPacket():
     is the value of the obs at that time. None values may be cached.
 
     A cached loop packet may be obtained by calling the get_packet() method.
+
+    CachedPacket constructor parameters:
+
+        rec: A dictionary of observation data to initialise the cache.
+
+    CachedPacket methods:
+
+        update.     Update the cache from a loop packet.
+        get_value.  Get an individual obs value from the cache.
+        get_packet. Get a loop packet from the cache.
+
     """
 
     # These fields must be available in every loop packet read from the
@@ -1015,7 +1147,7 @@ class CachedPacket():
         # use the current system time
         _ts = rec['dateTime'] if 'dateTime' in rec else int(time.time() + 0.5)
         # only prime those fields in CachedPacket.OBS
-        for _obs in CachedPacket.OBS:
+        for _obs in self.OBS:
             if _obs in rec and 'usUnits' in rec:
                 # only add a value if it exists and we know what units its in
                 self.cache[_obs] = {'value': rec[_obs], 'ts': _ts}
@@ -1074,7 +1206,7 @@ class CachedPacket():
 def calc_trend(obs_type, now_vt, units, db_manager, then_ts, grace=0):
     """ Calculate change in an observation over a specified period.
 
-    Inputs:
+    Parameters:
         obs_type:   database field name of observation concerned
         now_vt:     value of observation now (ie the finishing value)
         units:      units our returned value must be in
@@ -1113,7 +1245,7 @@ def obfuscate_password(url):
 
         scheme://user:xxx@hostname:port/
 
-    Inputs
+    Parameters
         url: the URL in which the password is to be obfuscated
 
     Returns:

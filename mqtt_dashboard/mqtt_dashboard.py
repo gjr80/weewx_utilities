@@ -314,6 +314,18 @@ class MQTTArchive(StdService):
     The MQTTArchive class creates and controls a threaded object of class
     MQTTArchiveThread that generates slow changing JSON data once each archive
     period and posts this data to a MQTT server.
+
+    MQTTArchive constructor parameters:
+
+        engine:      a weeWX engine, usually an instance of
+                     weewx.engine.StdEngine
+        config_dict: a weeWX config dictionary
+
+    MQTTArchive methods:
+
+        new_archive_record. Action to be taken upon receipt of a new archive
+                            record.
+        ShutDown.           Shutdown any child threads.
     """
 
     def __init__(self, engine, config_dict):
@@ -532,7 +544,7 @@ class MQTTArchiveThread(threading.Thread):
             logdbg("mqttarchivethread",
                    "Record (%s) processed in %.5f seconds" % (record['dateTime'],
                                                               (time.time()-t1)))
-        except FailedPost, e:
+        except user.mqtt_utility.FailedPost, e:
             # data could not be published, log and continue
             logerr("mqttarchivethread",
                    "Data was not published: %s" % (e, ))
@@ -1504,7 +1516,7 @@ class MQTTRealtimeThread(threading.Thread):
                 logdbg("mqttrealtimethread",
                        "Packet (%s) processed in %.5f seconds" % (cached_packet['dateTime'],
                                                                   (self.last_ts-t1)))
-            except FailedPost, e:
+            except user.mqtt_utility.FailedPost, e:
                 # data could not be published, log and continue
                 logerr("mqttrealtimethread",
                        "Data was not published: %s" % (e, ))
@@ -1543,7 +1555,7 @@ class MQTTRealtimeThread(threading.Thread):
     def end_archive_period(self):
         """Control processing at the end of each archive period."""
 
-        for obs in user.mqtt_utility.SUM_MANIFEST:
+        for obs in self.buffer.SUM_MANIFEST:
             self.buffer[obs].interval_reset()
 
     def calculate(self, packet):
