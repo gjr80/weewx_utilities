@@ -28,21 +28,28 @@ MQTT publishing based on MQTT uploader by Matthew Wall.
 
 This file contains the following weeWX services:
 
-1.  MQTTArchive. WeeWX service to publish JSON format data to a MQTT broker
-    each archive period. This service is predominantly used for publishing data
-    that does not chnage between successive archive records eg yesterday
-    aggregates, today sun/moon rise/set etc. The publication to a MQTT broker
-    is triggered by the arrival of a new archive record.
+1.  MQTTArchive. WeeWX service to publish slow changing JSON format data to a
+    MQTT broker each archive period. This service is predominantly used for
+    publishing data that seldom changes between successive archive records
+    eg yesterday aggregates, today sun/moon rise/set etc. The publication to a
+    MQTT broker is triggered by the arrival of a new archive record.
 
-3.  MQTTWU. A weeWX service to publish JSON format current conditions and
-    forecast data obtained from the WeatherUnderground (WU). The service
+2.  MQTTWU. A weeWX service to publish JSON format forecast and current
+    conditions  data obtained from the WeatherUnderground (WU). The service
     obtains WU data via calls to the WU API at a frequency defined by the user.
-    Selected current conditions and forecast data in JSON format is then
-    published to a MQTT broker. Upon arrival of a new archive record the
+    Selected forecast and current conditions data is then published in JSON
+    format to a MQTT broker. Upon arrival of a new archive record the
     service checks if it is time to update the WU data, if it is time to update
     the WU API is called and updated data published to the MQTT broker. If it
     is not time to update no further processing or publishing is undertaken
     until the arrival of the next archive record.
+
+3.  MQTTRealtime. A weeWX service to publish loop packet based data in JSON
+    format. The service receives all loop packets and generates a package of
+    data based upon loop packets and aggregates held in the weeWX daily s
+    ummaries. The generated data is then published in JSON format to a MQTT
+    broker. The user can select the frequency at which data is published to the
+    MQTT broker.
 
 Abbreviated instructions for use:
 
@@ -50,51 +57,21 @@ Abbreviated instructions for use:
 
     $ pip install paho-mqtt
 
-2.  Put this file in $BIN_ROOT/user.
+2.  Put this file and mqtt_utility.py in $BIN_ROOT/user.
 
-3.  If using MQTTArchive add the following stanza to weewx.conf:
+3.  Add a [MQTTDashboard] stanza to weewx.conf as follows:
 
-[MQTTArchive]
-    # Any database data (eg aggregates) are extracted using the [StdArchive]
-    # data_binding. Data from another database (eg appTemp) can be accessed
-    # using the binding specified by additional_binding. Optional, default
-    # 'wx_binding'.
-    additional_binding = wx_binding
+[MQTTDashboard]
 
-    [[Formats]]
-        degree_C               = %.2f
-        degree_F               = %.2f
-        degree_compass         = %.1f
-        foot                   = %.2f
-        hPa                    = %.2f
-        inHg                   = %.4f
-        inch                   = %.3f
-        inch_per_hour          = %.3f
-        km_per_hour            = %.1f
-        mile_per_hour          = %.1f
-        mbar                   = %.2f
-        meter                  = %.1f
-        meter_per_second       = %.2f
-        mm                     = %.2f
-        mm_per_hour            = %.2f
-        percent                = %.1f
-        uv_index               = %.2f
-        volt                   = %.2f
-        watt_per_meter_squared = %.1f
-        NONE                   = 'None'
-
-    [[Groups]]
-        # Groups. Optional. Note not all available weeWX units are supported
-        # for each group.
-        group_altitude = foot        # Options are 'meter' or 'foot'
-        group_pressure = hPa         # Options are 'inHg', 'mbar', or 'hPa'
-        group_rain = mm              # Options are 'inch' or 'mm'
-        group_speed = km_per_hour    # Options are 'mile_per_hour',
-                                     #  'km_per_hour' or 'meter_per_second'
-        group_temperature = degree_C # Options are 'degree_F' or 'degree_C'
-
-    # Config options to control MQTT uploader
     [[MQTT]]
+        # The following MQTT settings will be appied to each of the
+        # MQTTDashboard services. Settings can be overriden in each of the
+        # MQTTDashboard services by including a [[[MQTT]] stanza under each
+        # service and including MQTT settings for that particular service.
+
+        # Whether to log success publication or not.
+        log_success = True
+
         # MQTT server URL to be used. Must be int he format:
         #
         # server_url = mqtt://user:password@address:port/
@@ -111,15 +88,10 @@ Abbreviated instructions for use:
         #   server_url = mqtt://bill:bills_password@mqtt.domain_name.com:8883/
         #
         server_url = mqtt://user_name:password@mqtt.domain_name.com:port/
-        # MQTT server topic to post to eg:
-        #
-        # topic = weather/slow
-        #
-        # will result in the topic weather/slow being used.
-        topic = weather/slow
+
         [[[tls]]]
-            Options to be passed to Paho client tls_set method. Refer to Paho
-            client documentation: https://eclipse.org/paho/clients/python/docs/
+            # Options to be passed to Paho client tls_set method. Refer to Paho
+            # client documentation: https://eclipse.org/paho/clients/python/docs/
 
             # Path and name of CA certificates file. String, mandatory.
             ca_certs = /etc/ssl/certs/ca-certificates.crt
@@ -138,105 +110,192 @@ Abbreviated instructions for use:
             # option in quotes. String, optional.
             ciphers =
 
-4.  If using MQTTWU add the following stanza to weewx.conf:
-
-[MQTTWU]
-    # Config options to control MQTT uploader
-    [[MQTT]]
-        # MQTT server URL to be used. Must be int he format:
+    [[MQTTRealtime]]
+        # Config settings for MQTTRealtime Service.
         #
-        # server_url = mqtt://user:password@address:port/
+        # Minimum interval (seconds) between file generation. Ideally
+        # gauge-data.txt would be generated on receipt of every loop packet
+        # (there is no point in generating more frequently than this); however,
+        # in some cases the user may wish to generate gauge-data.txt less
+        # frequently. The min_interval option sets the minimum time between
+        # successive gauge-data.txt generations. Generation will be skipped on
+        # arrival of a loop packet if min_interval seconds have NOT elapsed
+        # since the last generation. If min_interval is 0 or omitted generation
+        # will occur on every loop packet (as will be the case if min_interval
+        # < station loop period). Optional, default is 0.
+        # min_interval =
+
+        # Binding to use for appTemp data. Optional, default 'wx_binding'.
+        additional_binding = wx_binding
+
+        # Update windrun value each loop period or just on each archive period.
+        # Optional, default is False.
+        windrun_loop = false
+
+        # Stations that provide partial packets are supported through a cache
+        # that caches packet data. max_cache_age is the maximum age  in seconds
+        # for which cached data is retained. Optional, default is 600 seconds.
+        max_cache_age = 600
+
+        # Parameters used in/required by rtgd calculations
+        [[[Calculate]]]
+            # Atmospheric transmission coefficient [0.7-0.91]. Optional,
+            # default is 0.8
+            atc = 0.8
+            # Atmospheric turbidity (2=clear, 4-5=smoggy). Optional, default
+            # is 2.
+            nfac = 2
+            [[[[Algorithm]]]]
+                # Theoretical max solar radiation algorithm to use, must be RS
+                # or Bras. optional, default is RS
+                maxSolarRad = RS
+
+        [[[DecimalPlaces]]]
+            inch_per_hour = 3
+            mile_per_hour = 1
+            degree_compass = 1
+            km_per_hour = 1
+            inHg = 4
+            mm = 2
+            meter_per_second = 2
+            percent = 1
+            km = 2
+            uv_index = 2
+            inch = 3
+            degree_F = 2
+            meter = 1
+            degree_C = 2
+            mile = 2
+            foot = 2
+            hPa = 2
+            mbar = 2
+            watt_per_meter_squared = 1
+            mm_per_hour = 2
+
+        [[[Groups]]]
+            # Groups. Optional. Note not all available weeWX units are
+            # supported for each group.
+            group_altitude = foot        # Options are 'meter' or 'foot'
+            group_pressure = hPa         # Options are 'inHg', 'mbar', or 'hPa'
+            group_rain = mm              # Options are 'inch' or 'mm'
+            group_speed = km_per_hour    # Options are 'mile_per_hour',
+                                         #  'km_per_hour' or 'meter_per_second'
+            group_temperature = degree_C # Options are 'degree_F' or 'degree_C'
+
+        [[[MQTT]]]
+            topic = weather/realtime
+
+    [[MQTTArchive]]
+        # Config settings for MQTTArchive Service.
         #
-        # where:
-        #   user:     The MQTT user name to be used
-        #   password: The password for the MQTT user
-        #   address:  The address or resolvable name of the MQTT server. Note
-        #             that if using TLS the this setting may need to match the
-        #             server name on the certificate used by the server.
-        #   port:     The port number on which the mQTT server is listening
-        #
-        #   eg:
-        #   server_url = mqtt://bill:bills_password@mqtt.domain_name.com:8883/
-        #
-        server_url = mqtt://user_name:password@mqtt.domain_name.com:port/
-        # MQTT server topic to post to eg:
-        #
-        # topic = weather/slow
-        #
-        # will result in the topic weather/slow being used.
-        topic = weather/slow
-        [[[tls]]]
-            Options to be passed to Paho client tls_set method. Refer to Paho
-            client documentation: https://eclipse.org/paho/clients/python/docs/
+        # Any database data (eg aggregates) are extracted using the
+        # [StdArchive] data_binding. Data from another database (eg appTemp)
+        # can be accessed using the binding specified by additional_binding.
+        # Optional, default is 'wx_binding'.
+        additional_binding = wx_binding
 
-            # Path and name of CA certificates file. String, mandatory.
-            ca_certs = /etc/ssl/certs/ca-certificates.crt
-            # Path and name of PEM encoded client certificate. String, optional.
-            certfile =
-            # Path and name of private key. String, optional.
-            keyfile =
-            # Certificate requirements imposed on the broker. String, optional.
-            # Available options are none, optional or required (default).
-            cert_reqs =
-            # SSL/TLS protocol to be used. String, optional. Available options
-            # are sslv1, sslv2, sslv23, tls, tlsv1 (default). Not all options
-            # are supported by all systems.
-            tls_version =
-            # Allowable encryption ciphers. If using comma separators enclose
-            # option in quotes. String, optional.
-            ciphers =
+        [[[Formats]]]
+            degree_C               = %.2f
+            degree_F               = %.2f
+            degree_compass         = %.1f
+            foot                   = %.2f
+            hPa                    = %.2f
+            inHg                   = %.4f
+            inch                   = %.3f
+            inch_per_hour          = %.3f
+            km_per_hour            = %.1f
+            mile_per_hour          = %.1f
+            mbar                   = %.2f
+            meter                  = %.1f
+            meter_per_second       = %.2f
+            mm                     = %.2f
+            mm_per_hour            = %.2f
+            percent                = %.1f
+            uv_index               = %.2f
+            volt                   = %.2f
+            watt_per_meter_squared = %.1f
+            NONE                   = 'None'
 
-    [[WU]]
-        # WU API key to be used when calling the WU API
-        api_key = xxxxxxxxxxxxxxxx
+        [[[Groups]]]
+            # Groups. Optional. Note not all available weeWX units are
+            # supported for each group.
+            group_altitude = foot        # Options are 'meter' or 'foot'
+            group_pressure = hPa         # Options are 'inHg', 'mbar', or 'hPa'
+            group_rain = mm              # Options are 'inch' or 'mm'
+            group_speed = km_per_hour    # Options are 'mile_per_hour',
+                                         #  'km_per_hour' or 'meter_per_second'
+            group_temperature = degree_C # Options are 'degree_F' or 'degree_C'
 
-        # Interval (in seconds) between forecast downloads. Default is 1800.
-        forecast_interval = 1800
+        # Config options to control MQTT uploader
+        [[[MQTT]]]
+            # MQTT server topic to post to eg:
+            #
+            # topic = weather/slow
+            #
+            # will result in the topic weather/slow being used.
+            topic = weather/slow
 
-        # Interval (in seconds) between current condition downloads. Default
-        # is 1800.
-        conditions_interval = 1800
+    [[MQTTWU]]
 
-        # Minimum period (in seconds) between like (eg forecast) API calls.
-        # This prevents conditions where a misbehaving program could call the
-        # WU API repeatedly thus violating the API usage conditions. Default
-        # is 60.
-        api_lockout_period = 60
+        [[WU]]
+            # WU API key to be used when calling the WU API
+            api_key = xxxxxxxxxxxxxxxx
 
-        # Maximum number attempts to obtain an API response. Default is 3.
-        max_WU_tries = 3
+            # Interval (in seconds) between forecast downloads. Default
+            # is 1800.
+            forecast_interval = 1800
 
-        # The location for the forecast and current conditions can be one of
-        # the following:
-        #   CA/San_Francisco     - US state/city
-        #   60290                - US zip code
-        #   Australia/Sydney     - Country/City
-        #   37.8,-122.4          - latitude,longitude
-        #   KJFK                 - airport code
-        #   pws:KCASANFR70       - PWS id
-        #   autoip               - AutoIP address location
-        #   autoip.json?geo_ip=38.102.136.138 - specific IP address location
-        # If no location is specified, station latitude and longitude are used
-        location = enter location here
+            # Interval (in seconds) between current condition downloads.
+            # Default is 1800.
+            conditions_interval = 1800
 
-5.  Set the options in the stanzas added to weewx.conf as required.
+            # Minimum period (in seconds) between like (eg forecast) API calls.
+            # This prevents conditions where a misbehaving program could call
+            # the WU API repeatedly thus violating the API usage conditions.
+            # Default is 60.
+            api_lockout_period = 60
 
-6.  Add the MQTT required services to the list of report services under
-[Engine] [[Services]] in weewx.conf:
+            # Maximum number attempts to obtain an API response. Default is 3.
+            max_WU_tries = 3
+
+            # The location for the forecast and current conditions can be one
+            # of the following:
+            #   CA/San_Francisco     - US state/city
+            #   60290                - US zip code
+            #   Australia/Sydney     - Country/City
+            #   37.8,-122.4          - latitude,longitude
+            #   KJFK                 - airport code
+            #   pws:KCASANFR70       - PWS id
+            #   autoip               - AutoIP address location
+            #   autoip.json?geo_ip=38.102.136.138 - specific IP address
+            #                                       location
+            # If no location is specified, station latitude and longitude are
+            # used
+            location = enter location here
+
+        [[[MQTT]]]
+            # MQTT server topics to post to eg:
+            #
+            # forecast_topic = weather/forecast
+            # conditions_topic = weather/conditions
+            #
+            # will result in the topic weather/forecast being used for forecast
+            # data and topic weather/conditions being used for conditions data.
+            forecast_topic = weather/forecast
+            conditions_topic = weather/conditions
+
+4.  Set the options in the [MQTTDashboard] stanza as required.
+
+5.  Add the required MQTTDashboard services to the list of report services
+under [Engine] [[Services]] in weewx.conf:
 
 [Engine]
     [[Services]]
-        report_services = ..., user.mqtt_dashboard.MQTTArchive, user.mqtt_dashboard.MQTTWU
+        report_services = ..., user.mqtt_dashboard.MQTTRealtime, user.mqtt_dashboard.MQTTArchive, user.mqtt_dashboard.MQTTWU
 
-7.  Stop/start weeWX.
+6.  Stop/start weeWX.
 
-9.  If using the MQTTArchive service, confirm that the JSON format data is
-being generated and posted to the MQTT server as per the [MQTTArchive] config
-options in weewx.conf.
-
-10. If using the MQTTWU service confirm that the relevant current conditions
-and forecast data is being downloaded from WU and published to the MQTT server
-as per the [MQTTWU] config options in weewx.conf.
+7.  Confirm that each service is publishing data to the specified MQTT broker.
 
 To do:
     - almanac temperature and pressure in process_record() need to better
@@ -309,11 +368,11 @@ def logerr(id, msg):
 
 
 class MQTTArchive(StdService):
-    """Service that posts slow changing JSON data to an MQTT server.
+    """Service that publishes slow changing JSON format data to an MQTT broker.
 
     The MQTTArchive class creates and controls a threaded object of class
     MQTTArchiveThread that generates slow changing JSON data once each archive
-    period and posts this data to a MQTT server.
+    period and publishes this data to a MQTT broker.
 
     MQTTArchive constructor parameters:
 
@@ -362,7 +421,7 @@ class MQTTArchive(StdService):
                                         mqtt_config_dict,
                                         lat=engine.stn_info.latitude_f,
                                         long=engine.stn_info.longitude_f,
-                                        alt=convert(engine.stn_info.altitude_vt,
+                                        alt_m=convert(engine.stn_info.altitude_vt,
                                                     'meter').value)
         self.thread.start()
 
@@ -407,9 +466,37 @@ class MQTTArchive(StdService):
 
 
 class MQTTArchiveThread(threading.Thread):
-    """Thread that generates JSON data and publishes to a MQTT broker."""
+    """Thread that publishes slow changing JSON format data to a MQTT broker.
 
-    def __init__(self, queue, config_dict, manager_dict, ma_config_dict, mqtt_config_dict, lat, long, alt):
+    The MQTTArchiveThread class accepts archive records via a Queue object,
+    creates a dictionary of selected obs/aggregates and publishes this data in
+    JSON format to a MQTT broker. The thread listens for a shutdown signal from
+    its parent.
+
+    MQTTArchiveThread constructor parameters:
+
+        queue:            A Queue object used to receive data from the parent.
+        config_dict:      A weeWX config dictionary.
+        manager_dict:     A manager config dictionary.
+        ma_config_dict:   A config dictionary for the MQTTArchiveThread.
+        mqtt_config_dict: A config dictionary for the MQTT broker.
+        lat:              Station latitude in decimal degrees.
+        long:             Station longitude in decimal degrees.
+        alt_m:            Station altitude in metres.
+
+    MQTTArchiveThread methods:
+
+        run.            Finalise some initialisation actions then monitor and
+                        act on data received via the queue.
+        process_record. Process a received archive record, obtain the data to
+                        be published and publish the data.
+        calculate.      Calculate/generate the data to be published.
+    """
+
+    def __init__(
+            self, queue, config_dict, manager_dict, ma_config_dict,
+            mqtt_config_dict, lat, long, alt_m):
+
         # Initialize my superclass
         threading.Thread.__init__(self)
 
@@ -450,7 +537,7 @@ class MQTTArchiveThread(threading.Thread):
         # get some station info
         self.latitude = lat
         self.longitude = long
-        self.altitude_m = alt
+        self.altitude_m = alt_m
 
         # initialise some properties that will pickup real values later
         self.db_manager = None
@@ -509,7 +596,7 @@ class MQTTArchiveThread(threading.Thread):
     def process_record(self, record):
         """Process incoming record, generate and post the JSON data.
 
-        Input:
+        Parameters:
             packet: dict containing the just received archive record
         """
 
@@ -559,7 +646,7 @@ class MQTTArchiveThread(threading.Thread):
     def calculate(self, record):
         """Construct a data dict to be used as the JSON source.
 
-        Input:
+        Parameters:
             record: loop data record
 
         Returns:
@@ -713,7 +800,20 @@ class MQTTWU(StdService):
 
     The MQTTWU class creates and controls a threaded object of class
     MQTTWUThread that obtains current conditions and forecast data for a
-    location from the WU API and publishes selected elements to a MQTT broker.
+    location from the WU API and publishes selected elements in JSON format to
+    a MQTT broker.
+
+    MQTTWU constructor parameters:
+
+        engine:      a weeWX engine, usually an instance of
+                     weewx.engine.StdEngine
+        config_dict: a weeWX config dictionary
+
+    MQTTWU methods:
+
+        new_archive_record. Action to be taken upon receipt of a new archive
+                            record.
+        ShutDown.           Shutdown any child threads.
     """
 
     def __init__(self, engine, config_dict):
@@ -793,7 +893,33 @@ class MQTTWU(StdService):
 
 
 class MQTTWUThread(threading.Thread):
-    """Thread to gather WU API data and publish selected data to a MQTT server."""
+    """Thread that obtains WU API data and publishes to a MQTT broker.
+
+    The MQTTWUThread class queries the WU API and publishes slected forecast
+    and current conditions data in JSON format to a MQTT broker. The WU API is
+    called at a user selectable fequency. The thread listens for a shutdown
+    signal from its parent.
+
+    MQTTWUThread constructor parameters:
+
+        queue:            A Queue object used to receive data from the parent.
+        config_dict:      A weeWX config dictionary.
+        mw_config_dict:   A config dictionary for the MQTTWUThread.
+        mqtt_config_dict: A config dictionary for the MQTT broker.
+        lat:              Station latitude in decimal degrees.
+        long:             Station longitude in decimal degrees.
+        alt_m:            Station altitude in metres.
+
+    MQTTWUThread methods:
+
+        run.               Monitor and act on data received via the queue.
+        process_wu.        Obtain forecast and current conditions data via the
+                           WU API then process and publish selected data in
+                           JSON format.
+        is_night.          Determine if an archive record refers to
+                           observations between sun set and sun rise.
+        parse_WU_response. Parse a WU API response and return selected data.
+    """
 
     # Define a dictionary to look up WU icon names and return corresponding
     # Saratoga icon code
@@ -831,7 +957,10 @@ class MQTTWUThread(threading.Thread):
         'chancetstorms'     : 29
         }
 
-    def __init__(self, queue, config_dict, mw_config_dict, mqtt_config_dict, lat, long, alt_m):
+    def __init__(
+            self, queue, config_dict, mw_config_dict, mqtt_config_dict,
+            lat, long, alt_m):
+
         # Initialize my superclass
         threading.Thread.__init__(self)
 
@@ -1106,8 +1235,24 @@ class MQTTRealtime(StdService):
     """Service that publishes loop based data to a MQTT broker.
 
     The MQTTRealtime class creates and controls a threaded object of class
-    MQTTRealtimeThread that generates bootstrap.json. Class MQTTRealtime feeds
-    the MQTTRealtimeThread object with data via a Queue.Queue instance.
+    MQTTRealtimeThread that generates loop based data and publishes this data
+    to a MQTT broker at a user selectable frequency.
+
+    MQTTRealtime constructor parameters:
+
+        engine:      a weeWX engine, usually an instance of
+                     weewx.engine.StdEngine
+        config_dict: a weeWX config dictionary
+
+    MQTTRealtime methods:
+
+        new_loop_packet.    Places new loop packets in the MQTTRealtimeThread
+                            queue.
+        new_archive_record. Places new archiuve records in the
+                            MQTTRealtimeThread queue.
+        end_archive_period. Places a END_ARCHIVE_RECORD event in the
+                            MQTTRealtimeThread queue.
+        ShutDown.           Shutdown any child threads.
     """
 
     def __init__(self, engine, config_dict):
@@ -1138,7 +1283,7 @@ class MQTTRealtime(StdService):
                                          mqtt_config_dict,
                                          lat=engine.stn_info.latitude_f,
                                          long=engine.stn_info.longitude_f,
-                                         alt=convert(engine.stn_info.altitude_vt,
+                                         alt_m=convert(engine.stn_info.altitude_vt,
                                                      'meter').value)
         self.thread.start()
 
@@ -1225,9 +1370,46 @@ class MQTTRealtime(StdService):
 
 
 class MQTTRealtimeThread(threading.Thread):
-    """Thread that generates JSON data and publishes to a MQTT broker."""
+    """Thread that publishes loop based JSON format data to a MQTT broker.
 
-    def __init__(self, queue, config_dict, mr_config_dict, mqtt_config_dict, lat, long, alt):
+    The MQTTRealtimeThread class accepts loop packets via a Queue object,
+    creates a dictionary of selected loop based obs/aggregates and publishes
+    this data in JSON format to a MQTT broker. A loop packet cache is used to
+    cater for stations that emit partial loop packets. The thread listens for
+    a shutdown signal from its parent.
+
+    MQTTRealtimeThread constructor parameters:
+
+        queue:            A Queue object used to receive data from the parent.
+        config_dict:      A weeWX config dictionary.
+        mr_config_dict:   A config dictionary for the MQTTRealtime Service.
+        mqtt_config_dict: A config dictionary for the MQTT broker.
+        lat:              Station latitude in decimal degrees.
+        long:             Station longitude in decimal degrees.
+        alt_m:            Station altitude in metres.
+
+    MQTTRealtimeThread methods:
+
+        run.                Finalise some initialisation actions then monitor
+                            and act on data received via the queue.
+        process_packet.     Process a received loop packet, obtain the data to
+                            be published and publish the data.
+        calculate.          Calculate/generate the data to be published.
+        process_stats.      Process a package of updated daily statistics.
+        new_archive_record. Take necessary actions upon receipt of an archive
+                            record.
+        end_archive_period. Take necessary actions at the end of an archive
+                            period.
+        calculate.          Construct a dictionary of data to be published in
+                            JSON format.
+        format.             Static method that formats a number, which could be
+                            None, to a given number of decimal places.
+    """
+
+    def __init__(
+            self, queue, config_dict, mr_config_dict, mqtt_config_dict,
+            lat, long, alt_m):
+
         # Initialize my superclass:
         threading.Thread.__init__(self)
 
@@ -1339,7 +1521,7 @@ class MQTTRealtimeThread(threading.Thread):
         # get some station info
         self.latitude = lat
         self.longitude = long
-        self.altitude_m = alt
+        self.altitude_m = alt_m
         self.station_type = config_dict['Station']['station_type']
 
         # initialise some properties that will pickup real values later
