@@ -314,6 +314,7 @@ import syslog
 import threading
 import time
 
+import configobj
 
 # weeWX imports
 import user.mqtt_utility
@@ -402,27 +403,21 @@ class MQTTArchive(StdService):
             return
         # get a MQTT config dict from [MQTTDashboard] to use as a starting
         # point
-        mqtt_config_dict = md_config_dict.get('MQTT', {})
+        mqtt_config_dict = configobj.ConfigObj(md_config_dict.get('MQTT', {}))
         # merge any MQTT overrides that may be specified under
         # [MQTTWU][[MQTT]]
         mqtt_config_dict.merge(ma_config_dict.get('MQTT'))
-
-        # get a manager dict
-        manager_dict = weewx.manager.get_manager_dict_from_config(config_dict,
-                                                                  'wx_binding')
-        self.db_manager = weewx.manager.open_manager(manager_dict)
 
         # get an instance of class MQTTArchiveThread and start the thread
         # running
         self.thread = MQTTArchiveThread(self.queue,
                                         config_dict,
-                                        manager_dict,
                                         ma_config_dict,
                                         mqtt_config_dict,
                                         lat=engine.stn_info.latitude_f,
                                         long=engine.stn_info.longitude_f,
                                         alt_m=convert(engine.stn_info.altitude_vt,
-                                                    'meter').value)
+                                                      'meter').value)
         self.thread.start()
 
         # bind ourself to the weeWX NEW_ARCHIVE_RECORD event
@@ -477,7 +472,6 @@ class MQTTArchiveThread(threading.Thread):
 
         queue:            A Queue object used to receive data from the parent.
         config_dict:      A weeWX config dictionary.
-        manager_dict:     A manager config dictionary.
         ma_config_dict:   A config dictionary for the MQTTArchiveThread.
         mqtt_config_dict: A config dictionary for the MQTT broker.
         lat:              Station latitude in decimal degrees.
@@ -494,8 +488,8 @@ class MQTTArchiveThread(threading.Thread):
     """
 
     def __init__(
-            self, queue, config_dict, manager_dict, ma_config_dict,
-            mqtt_config_dict, lat, long, alt_m):
+            self, queue, config_dict, ma_config_dict, mqtt_config_dict,
+            lat, long, alt_m):
 
         # Initialize my superclass
         threading.Thread.__init__(self)
@@ -503,7 +497,6 @@ class MQTTArchiveThread(threading.Thread):
         self.setDaemon(True)
         self.queue = queue
         self.config_dict = config_dict
-        self.manager_dict = manager_dict
 
         # various dicts used later with converters and formatters
         self.group_dict = ma_config_dict.get('Groups', weewx.units.MetricUnits)
@@ -517,16 +510,12 @@ class MQTTArchiveThread(threading.Thread):
         self.topic = mqtt_config_dict.get('topic', 'weather/slow')
         tls_opt = mqtt_config_dict.get('tls', None)
         retain = to_bool(mqtt_config_dict.get('retain', True))
-        max_tries = to_int(mqtt_config_dict.get('max_tries', 3))
-        retry_wait = to_float(mqtt_config_dict.get('retry_wait', 0.5))
         log_success = to_bool(mqtt_config_dict.get('log_success', False))
 
         # get a MQTTPublish object to do the publishing for us
         self.publisher = user.mqtt_utility.MQTTPublish(server=server_url,
                                                        tls=tls_opt,
                                                        retain=retain,
-                                                       max_tries=max_tries,
-                                                       retry_wait=retry_wait,
                                                        log_success=log_success)
 
         # Set the binding to be used for data from an additonal (ie not the
@@ -553,14 +542,9 @@ class MQTTArchiveThread(threading.Thread):
 
         # Would normally do this in our class' __init__ but since we are are
         # running in a thread we need to wait until the thread is actually
-        # running before we can get db managers and do any associated setup.
+        # running before we can get any db related objects.
 
-        # get a db manager
-        self.db_manager = weewx.manager.open_manager(self.manager_dict)
-        # get a db manager for any additional obs (eg appTemp)
-        if self.additional_binding:
-            self.additional_manager = weewx.manager.open_manager_with_config(self.config_dict,
-                                                                             self.additional_binding)
+        # get a DBBinder object
         self.db_binder = weewx.manager.DBBinder(self.config_dict)
 
         # get Converter and Formatter objects to convert/format our data
@@ -831,7 +815,7 @@ class MQTTWU(StdService):
             return
         # get a MQTT config dict from [MQTTDashboard] to use as a starting
         # point
-        mqtt_config_dict = md_config_dict.get('MQTT', {})
+        mqtt_config_dict = configobj.ConfigObj(md_config_dict.get('MQTT', {}))
         # merge any MQTT overrides that may be specified under
         # [MQTTWU][[MQTT]]
         mqtt_config_dict.merge(mw_config_dict.get('MQTT'))
@@ -983,10 +967,6 @@ class MQTTWUThread(threading.Thread):
         tls_opt = mqtt_config_dict.get('tls', None)
         # will MQTT broker retain messages
         retain = to_bool(mqtt_config_dict.get('retain', True))
-        # maximum number of attempts to publish data
-        max_tries = to_int(mqtt_config_dict.get('max_tries', 3))
-        # time (in seconds) to wait between retries
-        retry_wait = to_float(mqtt_config_dict.get('retry_wait', 0.5))
         # log successful publishing of data
         log_success = to_bool(mqtt_config_dict.get('log_success', False))
 
@@ -994,8 +974,6 @@ class MQTTWUThread(threading.Thread):
         self.publisher = user.mqtt_utility.MQTTPublish(server=server_url,
                                                       tls=tls_opt,
                                                       retain=retain,
-                                                      max_tries=max_tries,
-                                                      retry_wait=retry_wait,
                                                       log_success=log_success)
 
         # get WU config dictionary
@@ -1270,7 +1248,7 @@ class MQTTRealtime(StdService):
             return
         # get a MQTT config dict from [MQTTDashboard] to use as a starting
         # point
-        mqtt_config_dict = md_config_dict.get('MQTT', {})
+        mqtt_config_dict = configobj.ConfigObj(md_config_dict.get('MQTT', {}))
         # merge any MQTT overrides that may be specified under
         # [MQTTWU][[MQTT]]
         mqtt_config_dict.merge(mr_config_dict.get('MQTT'))
@@ -1416,24 +1394,21 @@ class MQTTRealtimeThread(threading.Thread):
         self.setDaemon(True)
         self.queue = queue
         self.config_dict = config_dict
-        self.manager_dict = manager_dict = weewx.manager.get_manager_dict_from_config(config_dict,
-                                                                                      'wx_binding')
+        self.manager_dict = weewx.manager.get_manager_dict_from_config(config_dict,
+                                                                       'wx_binding')
 
         # get MQTT config options
         server_url = mqtt_config_dict.get('server_url', None)
         self.topic = mqtt_config_dict.get('topic', 'weather/realtime')
         tls_opt = mqtt_config_dict.get('tls', None)
         retain = to_bool(mqtt_config_dict.get('retain', True))
-        max_tries = to_int(mqtt_config_dict.get('max_tries', 3))
-        retry_wait = to_float(mqtt_config_dict.get('retry_wait', 0.5))
         log_success = to_bool(mqtt_config_dict.get('log_success', False))
+        loginf("MQTTRealtimeThread", "tls_opt=%s" % (tls_opt,))
 
         # get a MQTTPublish object to do the publishing for us
         self.publisher = user.mqtt_utility.MQTTPublish(server=server_url,
                                                        tls=tls_opt,
                                                        retain=retain,
-                                                       max_tries=max_tries,
-                                                       retry_wait=retry_wait,
                                                        log_success=log_success)
 
         # setup file generation timing
@@ -1587,6 +1562,8 @@ class MQTTRealtimeThread(threading.Thread):
                 # a None record is our signal to exit, otherwise process the
                 # package depending on what it contains
                 if _package is None:
+                    # disconnect cleanly if we have already connected
+                    self.publisher.disconnect()
                     return
                 elif _package['type'] == 'archive':
                     # received the timestamp of a new archive record
@@ -1690,6 +1667,7 @@ class MQTTRealtimeThread(threading.Thread):
                 data = self.calculate(cached_packet)
                 # set our generation time
                 self.last_ts = cached_packet['dateTime']
+                self.publisher.connect()
                 # publish the data
                 self.publisher.publish(self.topic,
                                        json.dumps(data),

@@ -79,6 +79,7 @@ import paho.mqtt.client as mqtt
 
 
 # weeWX imports
+import weeutil.weeutil
 import weewx
 import weewx.units
 
@@ -128,6 +129,9 @@ class UnknownServer(IOError):
 
 class FailedPost(IOError):
     """Raised when a post fails after trying the max number of allowed times"""
+
+class ConnectionError(IOError):
+    """Raised when there is an error with a server/broker connection."""
 
 
 # ============================================================================
@@ -190,10 +194,6 @@ class MQTTPublish(object):
         retain:      Whether the published data will be set as the
                      "last known good"/retained message for the topic. Boolean,
                      default is False.
-        max_tries:   Maximum number of attempts to publish data before giving
-                     up. Integer, default is 3.
-        retry_wait:  Time in seconds to wait between retries. Float, default
-                     is 0.5.
         log_success: Whether to log successful publication or not. Boolean,
                      default is False.
 
@@ -220,22 +220,21 @@ class MQTTPublish(object):
     # on the local OpenSSL install so use try..except for some options.
     TLS_VER_OPTIONS = dict()
     try:
-        TLS_VER_OPTIONS['sslv2'] = ssl.PROTOCOL_SSLv2
+        TLS_VER_OPTIONS['SSLV2'] = ssl.PROTOCOL_SSLv2
     except AttributeError:
         pass
     try:
-        TLS_VER_OPTIONS['sslv3'] = ssl.PROTOCOL_SSLv3
+        TLS_VER_OPTIONS['SSLV3'] = ssl.PROTOCOL_SSLv3
     except AttributeError:
         pass
-    TLS_VER_OPTIONS['sslv23'] = ssl.PROTOCOL_SSLv23
-    TLS_VER_OPTIONS['tlsv1'] = ssl.PROTOCOL_TLSv1
+    TLS_VER_OPTIONS['SSLV23'] = ssl.PROTOCOL_SSLv23
+    TLS_VER_OPTIONS['TLSV1'] = ssl.PROTOCOL_TLSv1
     try:
-        TLS_VER_OPTIONS['tls'] = ssl.PROTOCOL_TLS
+        TLS_VER_OPTIONS['TLS'] = ssl.PROTOCOL_TLS
     except AttributeError:
         pass
 
-    def __init__(self, server, tls=None, retain=False,
-                 max_tries=3, retry_wait=0.5, log_success=False):
+    def __init__(self, server, tls=None, retain=False, log_success=False):
         # initialise the MQTTPublish object
 
         # do we have a server specified?
@@ -257,6 +256,7 @@ class MQTTPublish(object):
                                "Unknown option, ignoring cert_reqs option '%s'" % tls[opt])
                 elif opt == 'tls_version':
                     if tls[opt].upper() in self.TLS_VER_OPTIONS:
+                    # if tls[opt] in self.TLS_VER_OPTIONS:
                         self.tls_dict[opt] = self.TLS_VER_OPTIONS.get(tls[opt].upper())
                     else:
                         logdbg("mqttpublish",
@@ -269,12 +269,102 @@ class MQTTPublish(object):
             logdbg("mqttpublish", "TLS parameters: %s" % self.tls_dict)
         # whether the published data is to be retained by the broker
         self.retain = retain
-        # how many tries we will make to publish
-        self.max_tries = max_tries
-        # wait time between retries
-        self.retry_wait = retry_wait
         # log successful posts?
         self.log_success = log_success
+        self.timeout = 3
+        self.mqtt_client = None
+
+    @staticmethod
+    def on_connect(client, userdata, flags, rc):
+        """Paho on_connect callback."""
+
+        logdbg3('mqttpublish',
+               'Connected with flags="%s" return code="%d"' % (flags, rc))
+        client.connected = True
+
+    @staticmethod
+    def on_disconnect(client, userdata, rc):
+        """Paho on_disconnect callback."""
+
+        # log the disconnection
+        logdbg3('mqttpublish', 'Disconnected with rtn code="%d"' % (rc,))
+        # reset the connected flag
+        client.connected = False
+        # stop the loop
+        client.loop_stop()
+
+    @staticmethod
+    def on_publish(client, userdata, mid):
+        """Paho on_publish callback."""
+
+        # log the publication
+        logdbg3('mqttpublish', 'Published with message ID="%d"' % (mid,))
+        # set the published flag
+        client.published = True
+
+    def connect(self):
+        """Connect to a MQTT broker."""
+
+        if self.mqtt_client:
+            self.mqtt_client.reconnect()
+        else:
+            # parse the MQTT server URL
+            url = urlparse.urlparse(self.server)
+
+            # get a Paho client object
+            _client = mqtt.Client()
+            # setup the lient callbacks
+            _client.on_connect = self.on_connect
+            _client.on_disconnect = self.on_disconnect
+            _client.on_publish = self.on_publish
+            # initialise some flags
+            _client.connected = False
+
+            # if we have a user name and password supplied use them
+            if url.username is not None and url.password is not None:
+                _client.username_pw_set(url.username, url.password)
+            # if we have TLS options configure TLS on our broker connection
+            if len(self.tls_dict) > 0:
+                _client.tls_set(**self.tls_dict)
+            # get a timestamp to base any timeout on
+            _start_ts = time.time()
+            # connect to the broker, wrap in a try..except in case we have a socket error
+            try:
+                # connect to the MQTT broker
+                _client.connect(url.hostname, url.port)
+            except (socket.error, socket.timeout, socket.herror), e:
+                loginf("mqttpublish", "socket error: %s" % (e,))
+            # start the loop so our callbacks can react
+            _client.loop_start()
+            # Wait and see if we have a successfull connection. If we do the
+            # on_connect callback will set the connected flag and we can continue.
+            # If we don't get a connection after our timeout then raise an
+            # exception.
+            while not _client.connected:
+                if time.time() > self.timeout + _start_ts:
+                    raise ConnectionError("Connection timeout")
+                time.sleep(0.1)
+            # if we made it this far we have a client with a successful connection
+            self.mqtt_client = _client
+
+    def disconnect(self):
+        """Disconnect from a MQTT broker."""
+
+        # disconnect if we have a client that has been connected
+        if self.mqtt_client:
+            self.mqtt_client.disconnect()
+            # not sure if you could get a timeout on a disconnection but will
+            # cover it in any case
+            # get a timestamp to base any timeout on
+            _start_ts = time.time()
+            # Wait and see if we have a successfull disconnection. If we do the
+            # on_disconnect callback will reset the connected flag and we can
+            # continue. If we don't get a connection after our timeout then
+            # raise an exception.
+            while self.mqtt_client.connected:
+                if time.time() > self.timeout + _start_ts:
+                    raise ConnectionError("Disconnection timeout")
+                time.sleep(0.1)
 
     def publish(self, topic, data, identifier):
         """Publish data to a MQTT broker.
@@ -291,56 +381,37 @@ class MQTTPublish(object):
                         (eg successful publishing)
         """
 
-        # parse the MQTT server URL
-        url = urlparse.urlparse(self.server)
-        for _count in range(self.max_tries):
-            try:
-                # get a Paho client object
-                mc = mqtt.Client()
-                # if we have a user name and password supplied use them
-                if url.username is not None and url.password is not None:
-                    mc.username_pw_set(url.username, url.password)
-                # if we have TLS options configure TLS on our broker connection
-                if len(self.tls_dict) > 0:
-                    mc.tls_set(**self.tls_dict)
-                # connect to the MQTT broker
-                mc.connect(url.hostname, url.port)
-                # start the background loop() thread
-                mc.loop_start()
-                # publish the message
-                (res, mid) = mc.publish(topic, data, retain=self.retain)
-                # do ay error reporting/logging
-                if res != mqtt.MQTT_ERR_SUCCESS:
-                    # we encountered an MQTT broker error, log it
-                    logerr("mqttpublish",
-                           "MQTT publish failed for '%s': %s" % (topic, res))
-                elif self.log_success:
-                    # we are logging success so log it
-                    loginf("mqttpublish",
-                           "Published data(%s) to MQTT topic '%s'" % (identifier,
-                                                                      topic))
-                else:
-                    # debug=2 so log it
-                    logdbg2("mqttpublish",
-                            "Published data(%s) to MQTT topic '%s'" % (identifier,
-                                                                       topic))
-                # we are done, stop the background loop() thread
-                mc.loop_stop()
-                # disconnect from the broker
-                mc.disconnect()
-                return
-            except (socket.error, socket.timeout, socket.herror), e:
-                logdbg("mqttpublish",
-                       "MQTT publish attempt %d failed for %s: %s" % (_count+1,
-                                                                      topic,
-                                                                      e))
-            # if we got here we had a failed post due to a non-MQTT broker
-            # error (likely a network error) so sleep and try again
-            time.sleep(self.retry_wait)
+        self.mqtt_client.published = False
+        try:
+            # publish the message
+            (res, mid) = self.mqtt_client.publish(topic, payload=data, qos=2, retain=self.retain)
+        except (socket.error, socket.timeout, socket.herror), e:
+            logdbg("mqttpublish",
+                   "MQTT publish attempt %d failed for %s: %s" % (_count+1,
+                                                                  topic,
+                                                                  e))
+        _start_ts = time.time()
+        while not self.mqtt_client.published:
+            if time.time() > self.timeout + _start_ts:
+                raise ConnectionError("Could not publish - timeout")
+            time.sleep(0.1)
+        # do any error reporting/logging
+        if res != mqtt.MQTT_ERR_SUCCESS:
+            # This should not happen but just in case. We encountered an
+            # MQTT broker error, log it
+            logerr("mqttpublish",
+                   "MQTT publish failed for '%s': %s" % (topic, res))
+        elif self.log_success:
+            # we are logging success so log it
+            loginf("mqttpublish",
+                   "Published data(%s) to MQTT topic '%s'" % (identifier,
+                                                              topic))
         else:
-            # we couldn't post after self.max_tries so raise an error
-            raise FailedPost("Failed upload after %d tries" %
-                             (self.max_tries,))
+            # debug=2 so log it
+            logdbg2("mqttpublish",
+                    "Published data(%s) to MQTT topic '%s'" % (identifier,
+                                                               topic))
+
 
 # ============================================================================
 #                        class WeatherUndergroundAPI
