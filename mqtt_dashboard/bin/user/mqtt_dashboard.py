@@ -512,11 +512,11 @@ class MQTTArchiveThread(threading.Thread):
         retain = to_bool(mqtt_config_dict.get('retain', True))
         log_success = to_bool(mqtt_config_dict.get('log_success', False))
 
-        # get a MQTTPublish object to do the publishing for us
-        self.publisher = user.mqtt_utility.MQTTPublish(server=server_url,
-                                                       tls=tls_opt,
-                                                       retain=retain,
-                                                       log_success=log_success)
+        # get a MQTTPublisher object to do the publishing for us
+        self.publisher = user.mqtt_utility.MQTTPublisher(server=server_url,
+                                                         tls=tls_opt,
+                                                         retain=retain,
+                                                         log_success=log_success)
 
         # Set the binding to be used for data from an additonal (ie not the
         # [StdArchive]) binding. Default to 'wx_binding'.
@@ -970,11 +970,11 @@ class MQTTWUThread(threading.Thread):
         # log successful publishing of data
         log_success = to_bool(mqtt_config_dict.get('log_success', False))
 
-        # get a MQTTPublish object to do the publishing for us
-        self.publisher = user.mqtt_utility.MQTTPublish(server=server_url,
-                                                      tls=tls_opt,
-                                                      retain=retain,
-                                                      log_success=log_success)
+        # get a MQTTPublisher object to do the publishing for us
+        self.publisher = user.mqtt_utility.MQTTPublisher(server=server_url,
+                                                        tls=tls_opt,
+                                                        retain=retain,
+                                                        log_success=log_success)
 
         # get WU config dictionary
         wu_config_dict = mw_config_dict.get('WU', {})
@@ -1405,11 +1405,11 @@ class MQTTRealtimeThread(threading.Thread):
         log_success = to_bool(mqtt_config_dict.get('log_success', False))
         loginf("MQTTRealtimeThread", "tls_opt=%s" % (tls_opt,))
 
-        # get a MQTTPublish object to do the publishing for us
-        self.publisher = user.mqtt_utility.MQTTPublish(server=server_url,
-                                                       tls=tls_opt,
-                                                       retain=retain,
-                                                       log_success=log_success)
+        # get a MQTTPublisher object to do the publishing for us
+        self.publisher = user.mqtt_utility.MQTTPublisher(server=server_url,
+                                                         tls=tls_opt,
+                                                         retain=retain,
+                                                         log_success=log_success)
 
         # setup file generation timing
         self.min_interval = to_int(mr_config_dict.get('min_interval', None))

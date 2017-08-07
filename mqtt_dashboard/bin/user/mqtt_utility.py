@@ -28,7 +28,7 @@ MQTT publishing based on MQTT uploader by Matthew Wall.
 
 This file contains the following classes:
 
-1.  MQTTPublish. A class to manage publishing data to a MQTT broker.
+1.  MQTTPublisher. A class to manage publishing data to a MQTT broker.
 
 2.  WeatherUndergroundAPI. A class for obtaining data via the Weather
     Underground API.
@@ -135,21 +135,20 @@ class ConnectionError(IOError):
 
 
 # ============================================================================
-#                            class MQTTPublish
+#                           class MQTTPublisher
 # ============================================================================
 
 
-class MQTTPublish(object):
+class MQTTPublisher(object):
     """A wrapper class to publish data to a MQTT broker using the Paho client.
 
     Based upon the weeWX MQTT uploader by Matthew Wall.
 
     This class supports publishing free form data to a MQTT broker using the
-    Paho client with optional TLS support. An MQTTPublish object has a single
-    method, publish(), that will publish the data concerned to the MQTT broker
-    defined by the object.
+    Paho client with optional TLS support. An MQTTPublisher object has three
+    prime methods; connect(), publish() and disconnect().
 
-    MQTTPublish constructor parameters:
+    MQTTPublisher constructor parameters:
 
         server:      Server URL to be used. String in the format:
 
@@ -197,9 +196,14 @@ class MQTTPublish(object):
         log_success: Whether to log successful publication or not. Boolean,
                      default is False.
 
-    MQTTPublish methods:
+    MQTTPublisher methods:
 
-        publish. Publish data to a MQTT broker.
+        connect.       Connect or reconnect to a MQTT broker.
+        disconnect.    Disconnect from a MQTT broker.
+        publish.       Publish data to a MQTT broker.
+        on_connect.    Paho 'on_connect' callback function.
+        on_disconnect. Paho 'on_disconnect' callback function.
+        on_publish.    Paho 'on_publish' callback function.
     """
 
     # Define available options used in setting the Paho client to use TLS.
@@ -234,8 +238,9 @@ class MQTTPublish(object):
     except AttributeError:
         pass
 
+
     def __init__(self, server, tls=None, retain=False, log_success=False):
-        # initialise the MQTTPublish object
+        # initialise the MQTTPublisher object
 
         # do we have a server specified?
         if server:
@@ -252,21 +257,21 @@ class MQTTPublish(object):
                     if tls[opt].upper() in self.CERT_REQ_OPTIONS:
                         self.tls_dict[opt] = self.CERT_REQ_OPTIONS.get(tls[opt].upper())
                     else:
-                        logdbg("mqttpublish",
+                        logdbg("mqttpublisher",
                                "Unknown option, ignoring cert_reqs option '%s'" % tls[opt])
                 elif opt == 'tls_version':
                     if tls[opt].upper() in self.TLS_VER_OPTIONS:
                     # if tls[opt] in self.TLS_VER_OPTIONS:
                         self.tls_dict[opt] = self.TLS_VER_OPTIONS.get(tls[opt].upper())
                     else:
-                        logdbg("mqttpublish",
+                        logdbg("mqttpublisher",
                                "Unknown option, ignoring tls_version option '%s'" % tls[opt])
                 elif opt in self.TLS_OPTIONS:
                     self.tls_dict[opt] = tls[opt]
                 else:
-                    logdbg("mqttpublish", "Unknown TLS option '%s'" % opt)
+                    logdbg("mqttpublisher", "Unknown TLS option '%s'" % opt)
 
-            logdbg("mqttpublish", "TLS parameters: %s" % self.tls_dict)
+            logdbg("mqttpublisher", "TLS parameters: %s" % self.tls_dict)
         # whether the published data is to be retained by the broker
         self.retain = retain
         # log successful posts?
@@ -274,51 +279,43 @@ class MQTTPublish(object):
         self.timeout = 3
         self.mqtt_client = None
 
-    @staticmethod
-    def on_connect(client, userdata, flags, rc):
-        """Paho on_connect callback."""
+    def connect(self, id=None):
+        """Connect to a MQTT broker.
 
-        logdbg3('mqttpublish',
-               'Connected with flags="%s" return code="%d"' % (flags, rc))
-        client.connected = True
+        Connect to a broker, or a previous connection exists attempt to
+        reconnect. A successful connection results in the mqtt_client property
+        being set to the Client object.
 
-    @staticmethod
-    def on_disconnect(client, userdata, rc):
-        """Paho on_disconnect callback."""
+        If connection fails due to a socket error a ConnectionError is raised
+        with an approperiate error message. If a connection error message is
+        received from the on_connect callback a ConnectionError is raised with
+        the received connection error message. Otherwise if the on_connect
+        callback does not respond with a successful connection within the
+        timeout period a ConnectionError is raised.
 
-        # log the disconnection
-        logdbg3('mqttpublish', 'Disconnected with rtn code="%d"' % (rc,))
-        # reset the connected flag
-        client.connected = False
-        # stop the loop
-        client.loop_stop()
-
-    @staticmethod
-    def on_publish(client, userdata, mid):
-        """Paho on_publish callback."""
-
-        # log the publication
-        logdbg3('mqttpublish', 'Published with message ID="%d"' % (mid,))
-        # set the published flag
-        client.published = True
-
-    def connect(self):
-        """Connect to a MQTT broker."""
+        Parameters:
+            id: Client ID to be used when creating a Client object. Must be
+                unique on the broker concerned. Setting to None (the default)
+                will resuolt in a unique ID being auto-generated.
+        """
 
         if self.mqtt_client:
-            self.mqtt_client.reconnect()
+            try:
+                self.mqtt_client.reconnect()
+            except (socket.error, socket.timeout, socket.herror), e:
+                loginf("mqttpublisher", "socket error: %s" % (e,))
         else:
-            # parse the MQTT server URL
-            url = urlparse.urlparse(self.server)
-
             # get a Paho client object
-            _client = mqtt.Client()
+            _client = mqtt.Client(id)
             # setup the lient callbacks
             _client.on_connect = self.on_connect
             _client.on_disconnect = self.on_disconnect
             _client.on_publish = self.on_publish
             # initialise some flags
             _client.connected = False
+            _client.conn_error_msg = None
+            # parse the MQTT server URL
+            url = urlparse.urlparse(self.server)
 
             # if we have a user name and password supplied use them
             if url.username is not None and url.password is not None:
@@ -333,22 +330,27 @@ class MQTTPublish(object):
                 # connect to the MQTT broker
                 _client.connect(url.hostname, url.port)
             except (socket.error, socket.timeout, socket.herror), e:
-                loginf("mqttpublish", "socket error: %s" % (e,))
-            # start the loop so our callbacks can react
+                raise ConnectionError("socket error: %s" % (e,))
+            # start the network loop so our callbacks can react
             _client.loop_start()
             # Wait and see if we have a successfull connection. If we do the
             # on_connect callback will set the connected flag and we can continue.
             # If we don't get a connection after our timeout then raise an
             # exception.
             while not _client.connected:
+                # if we have timed out then raise
                 if time.time() > self.timeout + _start_ts:
                     raise ConnectionError("Connection timeout")
+                # if we have received a connection error message then raise
+                if _client.conn_error_msg:
+                    raise ConnectionError(_client.conn_error_msg)
+                # otherwise sleep
                 time.sleep(0.1)
-            # if we made it this far we have a client with a successful connection
+            # if we made it this far we have a successful connection
             self.mqtt_client = _client
 
     def disconnect(self):
-        """Disconnect from a MQTT broker."""
+        """Disconnect from a previously connected MQTT broker."""
 
         # disconnect if we have a client that has been connected
         if self.mqtt_client:
@@ -366,30 +368,39 @@ class MQTTPublish(object):
                     raise ConnectionError("Disconnection timeout")
                 time.sleep(0.1)
 
-    def publish(self, topic, data, identifier):
+    def publish(self, topic, data, identifier, qos=2):
         """Publish data to a MQTT broker.
 
         Publishes data to topic. Publish failures (socket.error, socket.timeout
-        and socket.herror) that trigger a retry are logged. If publication
-        fails after self.max_tries attempts a FailedPost exception is raised.
+        and socket.herror) that trigger a retry are logged.
+
+        If publication fails due to a socket error the error is logged and no
+        further action is taken. Other non-fatal errors will result in a
+        timeout and a ConnectionError exception being raised. If publication is
+        not critical the parent calling the publish() method should catch the
+        exception and act accordingly.
 
         Parameters:
-            topic:      the topic to which the data is to be published
-            data:       the data to be published
-            identifier: an identifier (eg timestamp) used to identify a
-                        particular publication in the system logs
-                        (eg successful publishing)
+            topic:      Topic to which the data is to be published
+            data:       Data to be published
+            identifier: Identifier (eg timestamp) used to identify a particular
+                        publication in the system logs (eg successful
+                        publishing)
+            qos:        MQTT quality of service level to be used when
+                        publishing
         """
 
+        # reset published flag
         self.mqtt_client.published = False
+
+        # publish the message, wrap in try..except to catch any socket errors
         try:
-            # publish the message
-            (res, mid) = self.mqtt_client.publish(topic, payload=data, qos=2, retain=self.retain)
+            (res, mid) = self.mqtt_client.publish(topic, payload=data,
+                                                  qos=qos, retain=self.retain)
         except (socket.error, socket.timeout, socket.herror), e:
-            logdbg("mqttpublish",
-                   "MQTT publish attempt %d failed for %s: %s" % (_count+1,
-                                                                  topic,
-                                                                  e))
+            logdbg("mqttpublisher",
+                   "MQTT publish failed for %s: %s" % (topic, e))
+            return
         _start_ts = time.time()
         while not self.mqtt_client.published:
             if time.time() > self.timeout + _start_ts:
@@ -399,18 +410,86 @@ class MQTTPublish(object):
         if res != mqtt.MQTT_ERR_SUCCESS:
             # This should not happen but just in case. We encountered an
             # MQTT broker error, log it
-            logerr("mqttpublish",
-                   "MQTT publish failed for '%s': %s" % (topic, res))
+            logerr("mqttpublisher",
+                   "MQTT publish failed for '%s': %s (%d)" % (topic,
+                                                              mqtt.error_string(res),
+                                                              res))
         elif self.log_success:
             # we are logging success so log it
-            loginf("mqttpublish",
+            loginf("mqttpublisher",
                    "Published data(%s) to MQTT topic '%s'" % (identifier,
                                                               topic))
         else:
             # debug=2 so log it
-            logdbg2("mqttpublish",
+            logdbg2("mqttpublisher",
                     "Published data(%s) to MQTT topic '%s'" % (identifier,
                                                                topic))
+
+    @staticmethod
+    def on_connect(client, userdata, flags, rc):
+        """Paho on_connect callback.
+
+        Retrieves the CONNACK message. If the connection was accepted
+        (CONNACK_ACCEPTED) the connection is logged and the connection error
+        message property set to None. Otherwise the connection error message
+        property contains the decoded CONNACK message.
+
+        Parameters:
+            client:   The Paho client instance for this callback
+            userdata: The private user data as set in Client() or
+                      userdata_set()
+            flags:    Dict containing response flags from the broker
+            rc:       Response code determining success or otherwise
+        """
+
+        # get the connection message
+        conn_msg = mqtt.connack_string(rc)
+        # was the connection was accepted ?
+        if rc == mqtt.CONNACK_ACCEPTED:
+            # successful connection, log the result and set some flags
+            logdbg3('mqttpublisher', conn_msg)
+            # flag indicating we have a connection to the broker
+            client.connected = True
+            # reset the connection error message
+            client.conn_error_msg = None
+        else:
+            # unsuccessful connection, log the result and store the error
+            # message
+            logdbg("mqttpublisher", conn_msg)
+            # store the error message
+            client.conn_error_msg = conn_msg
+
+    @staticmethod
+    def on_disconnect(client, userdata, rc):
+        """Paho on_disconnect callback.
+
+        Log the disconnection, reset the connected flag and stop the network
+        loop. If the disconnection was not due to a Client.disconnect call
+        store an error message.
+        """
+
+        # log the disconnection
+        logdbg3('mqttpublisher', 'Disconnected with rtn code="%d"' % (rc,))
+        # reset the connected flag
+        client.connected = False
+        # if the disconnection was not the result of a disconnect() call then
+        # it is unexpected and may indicate a network error.
+        if rc != mqtt.MQTT_ERR_SUCCESS:
+            client.conn_error_msg = "Unexpected client disconnection. Possible network error."
+        # stop the network loop
+        client.loop_stop()
+
+    @staticmethod
+    def on_publish(client, userdata, mid):
+        """Paho on_publish callback.
+
+        Log the publication and set the published flag.
+        """
+
+        # log the publication
+        logdbg3('mqttpublisher', 'Published with message ID="%d"' % (mid,))
+        # set the published flag
+        client.published = True
 
 
 # ============================================================================
