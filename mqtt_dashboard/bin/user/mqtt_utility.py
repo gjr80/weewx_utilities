@@ -522,7 +522,8 @@ class WeatherUndergroundAPI(object):
         # save the API key to be used
         self.api_key = api_key
 
-    def data_request(self, features, query, settings=None, format='json', max_tries=3):
+    def data_request(self, features, query, settings=None,
+                     format='json', max_tries=3):
         """Make a data feature request via the API and return the results.
 
         Construct an API call URL, make the call and return the response.
@@ -532,7 +533,7 @@ class WeatherUndergroundAPI(object):
                        of strings.
             query:     The location for which the information is sought. Refer
                        usage comments at start of this file. String.
-            settings:  Optional settings to be included in te API call
+            settings:  Optional settings to be included in the API call
                        eg lang:FR for French, pws:1 to use PWS for conditions.
                        String or list/tuple of strings. Default is 'pws:1'
             format:    The output format of the data returned by the WU API.
