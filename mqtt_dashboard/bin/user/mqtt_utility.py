@@ -68,6 +68,7 @@ To do:
 
 # python imports
 import math
+import operator
 import socket
 import ssl
 import syslog
@@ -90,30 +91,30 @@ def logmsg(level, msg):
     syslog.syslog(level, msg)
 
 
-def logcrit(id, msg):
-    logmsg(syslog.LOG_CRIT, '%s: %s' % (id, msg))
+def logcrit(src_id, msg):
+    logmsg(syslog.LOG_CRIT, '%s: %s' % (src_id, msg))
 
 
-def logdbg(id, msg):
-    logmsg(syslog.LOG_DEBUG, '%s: %s' % (id, msg))
+def logdbg(src_id, msg):
+    logmsg(syslog.LOG_DEBUG, '%s: %s' % (src_id, msg))
 
 
-def logdbg2(id, msg):
+def logdbg2(src_id, msg):
     if weewx.debug >= 2:
-        logmsg(syslog.LOG_DEBUG, '%s: %s' % (id, msg))
+        logmsg(syslog.LOG_DEBUG, '%s: %s' % (src_id, msg))
 
 
-def logdbg3(id, msg):
+def logdbg3(src_id, msg):
     if weewx.debug >= 3:
-        logmsg(syslog.LOG_DEBUG, '%s: %s' % (id, msg))
+        logmsg(syslog.LOG_DEBUG, '%s: %s' % (src_id, msg))
 
 
-def loginf(id, msg):
-    logmsg(syslog.LOG_INFO, '%s: %s' % (id, msg))
+def loginf(src_id, msg):
+    logmsg(syslog.LOG_INFO, '%s: %s' % (src_id, msg))
 
 
-def logerr(id, msg):
-    logmsg(syslog.LOG_ERR, '%s: %s' % (id, msg))
+def logerr(src_id, msg):
+    logmsg(syslog.LOG_ERR, '%s: %s' % (src_id, msg))
 
 
 # ============================================================================
@@ -124,11 +125,14 @@ def logerr(id, msg):
 class MissingApiKey(IOError):
     """Raised when a WU API key cannot be found"""
 
+
 class UnknownServer(IOError):
     """Raised when an invalid or missing server URL isprovided"""
 
+
 class FailedPost(IOError):
     """Raised when a post fails after trying the max number of allowed times"""
+
 
 class ConnectionError(IOError):
     """Raised when there is an error with a server/broker connection."""
@@ -238,7 +242,6 @@ class MQTTPublisher(object):
     except AttributeError:
         pass
 
-
     def __init__(self, server, tls=None, retain=False, log_success=False):
         # initialise the MQTTPublisher object
 
@@ -261,7 +264,6 @@ class MQTTPublisher(object):
                                "Unknown option, ignoring cert_reqs option '%s'" % tls[opt])
                 elif opt == 'tls_version':
                     if tls[opt].upper() in self.TLS_VER_OPTIONS:
-                    # if tls[opt] in self.TLS_VER_OPTIONS:
                         self.tls_dict[opt] = self.TLS_VER_OPTIONS.get(tls[opt].upper())
                     else:
                         logdbg("mqttpublisher",
@@ -279,7 +281,7 @@ class MQTTPublisher(object):
         self.timeout = 3
         self.mqtt_client = None
 
-    def connect(self, id=None):
+    def connect(self, client_id=None):
         """Connect to a MQTT broker.
 
         Connect to a broker, or a previous connection exists attempt to
@@ -287,16 +289,16 @@ class MQTTPublisher(object):
         being set to the Client object.
 
         If connection fails due to a socket error a ConnectionError is raised
-        with an approperiate error message. If a connection error message is
+        with an appropriate error message. If a connection error message is
         received from the on_connect callback a ConnectionError is raised with
         the received connection error message. Otherwise if the on_connect
         callback does not respond with a successful connection within the
         timeout period a ConnectionError is raised.
 
         Parameters:
-            id: Client ID to be used when creating a Client object. Must be
-                unique on the broker concerned. Setting to None (the default)
-                will resuolt in a unique ID being auto-generated.
+            client_id: Client ID to be used when creating a Client object. Must
+                       be unique on the broker concerned. Setting to None (the
+                       default) will result in a unique ID being auto-generated.
         """
 
         if self.mqtt_client:
@@ -306,8 +308,8 @@ class MQTTPublisher(object):
                 loginf("mqttpublisher", "socket error: %s" % (e,))
         else:
             # get a Paho client object
-            _client = mqtt.Client(id)
-            # setup the lient callbacks
+            _client = mqtt.Client(client_id)
+            # setup the client callbacks
             _client.on_connect = self.on_connect
             _client.on_disconnect = self.on_disconnect
             _client.on_publish = self.on_publish
@@ -333,7 +335,7 @@ class MQTTPublisher(object):
                 raise ConnectionError("socket error: %s" % (e,))
             # start the network loop so our callbacks can react
             _client.loop_start()
-            # Wait and see if we have a successfull connection. If we do the
+            # Wait and see if we have a successful connection. If we do the
             # on_connect callback will set the connected flag and we can continue.
             # If we don't get a connection after our timeout then raise an
             # exception.
@@ -359,7 +361,7 @@ class MQTTPublisher(object):
             # cover it in any case
             # get a timestamp to base any timeout on
             _start_ts = time.time()
-            # Wait and see if we have a successfull disconnection. If we do the
+            # Wait and see if we have a successful disconnection. If we do the
             # on_disconnect callback will reset the connected flag and we can
             # continue. If we don't get a connection after our timeout then
             # raise an exception.
@@ -523,24 +525,24 @@ class WeatherUndergroundAPI(object):
         self.api_key = api_key
 
     def data_request(self, features, query, settings=None,
-                     format='json', max_tries=3):
+                     resp_format='json', max_tries=3):
         """Make a data feature request via the API and return the results.
 
         Construct an API call URL, make the call and return the response.
 
         Parameters:
-            features:  One or more WU API data features. String or list/tuple
-                       of strings.
-            query:     The location for which the information is sought. Refer
-                       usage comments at start of this file. String.
-            settings:  Optional settings to be included in the API call
-                       eg lang:FR for French, pws:1 to use PWS for conditions.
-                       String or list/tuple of strings. Default is 'pws:1'
-            format:    The output format of the data returned by the WU API.
-                       String, either 'json' or 'xml' for JSON or XML
-                       respectively. Default is JSON.
-            max_tries: The maximum number of attempts to be made to obtain a
-                       response from the WU API. Default is 3.
+            features:    One or more WU API data features. String or list/tuple
+                         of strings.
+            query:       The location for which the information is sought. Refer
+                         usage comments at start of this file. String.
+            settings:    Optional settings to be included in the API call
+                         eg lang:FR for French, pws:1 to use PWS for conditions.
+                         String or list/tuple of strings. Default is 'pws:1'
+            resp_format: The output format of the data returned by the WU API.
+                         String, either 'json' or 'xml' for JSON or XML
+                         respectively. Default is JSON.
+            max_tries:   The maximum number of attempts to be made to obtain a
+                         response from the WU API. Default is 3.
 
         Returns:
             The WU API response in JSON or XML format.
@@ -572,7 +574,7 @@ class WeatherUndergroundAPI(object):
                                 settings_str,
                                 'q',
                                 query])
-        url = '.'.join([partial_url, format])
+        url = '.'.join([partial_url, resp_format])
         # if debug >=1 log the URL used but obfuscate the API key
         if weewx.debug >= 1:
             _obf_api_key = '*'*(len(self.api_key) - 4) + self.api_key[-4:]
@@ -582,7 +584,7 @@ class WeatherUndergroundAPI(object):
                              settings_str,
                              'q',
                              query])
-            _obf_url = '.'.join([_obf, format])
+            _obf_url = '.'.join([_obf, resp_format])
             logdbg("weatherundergroundapi",
                    "Submitting API call using URL: %s" % (_obf_url, ))
         # we will attempt the call max_tries times
@@ -667,11 +669,14 @@ class Buffer(dict):
     HIST_MANIFEST = ['windSpeed', 'windDir', 'wind']
     # obs for which we need a running sum
     SUM_MANIFEST = ['rain', 'wind']
-    # maximum time (seonds) to keep an obs value
+    # maximum time (seconds) to keep an obs value
     MAX_AGE = 600
 
     def __init__(self, day_stats, additional_day_stats=None):
         """Initialise an instance of our class."""
+
+        # initialize my superclass
+        super(Buffer, self).__init__(self)
 
         # seed our buffer objects from day_stats
         for obs in [f for f in day_stats if f in self.MANIFEST]:
@@ -705,7 +710,8 @@ class Buffer(dict):
                                                                history=hist,
                                                                sum=sum)
 
-    def seed_windrun(self, day_stats):
+    @staticmethod
+    def seed_windrun(day_stats):
         """Seed day windrun."""
 
         if 'windSpeed' in day_stats:
@@ -813,7 +819,7 @@ class Buffer(dict):
         kept longer than the end of the archive period.
         """
 
-        for obs in SUM:
+        for obs in self.SUM_MANIFEST:
             self[obs].nineam_reset()
 
 
@@ -852,9 +858,9 @@ class VectorBuffer(object):
         history_vec_avg. Calculate the vector average of the history data for
                          the obs concerned.
         day_vec_avg.     Calculate the day vector average value for the obs
-                         concerend.
-        day_vec_dir.     Calculate the day vector avereage direction for the
-                         obs concerend.
+                         concerned.
+        day_vec_dir.     Calculate the day vector average direction for the
+                         obs concerned.
     """
 
     default_init = (None, None, None, None, None)
@@ -968,7 +974,7 @@ class VectorBuffer(object):
         born = ts - age
         snapshot = [a for a in self.history if a.ts >= born]
         if len(snapshot) > 0:
-            _max = max(snapshot, key=itemgetter(1)[0])
+            _max = max(snapshot, key=operator.itemgetter(1)[0])
             return ObsTuple(_max[0], _max[1])
         else:
             return None
@@ -1154,13 +1160,13 @@ class ScalarBuffer(object):
 
         Returns:
             An object of type ObsTuple where value is the max value found and
-            ts is the timestamp when it ocurred.
+            ts is the timestamp when it occurred.
         """
 
         born = ts - age
         snapshot = [a for a in self.history if a.ts >= born]
         if len(snapshot) > 0:
-            _max = max(snapshot, key=itemgetter(1))
+            _max = max(snapshot, key=operator.itemgetter(1))
             return ObsTuple(_max[0], _max[1])
         else:
             return None
@@ -1213,8 +1219,8 @@ class ObsTuple(tuple):
 
         *args: A (minimum) two-way tuple where the first element is the obs
                value (may be a tuple for a vector obs) and the second element
-               is the epoch timesdtamp of the observation. Any other elements
-               will be stored in the Obstuple object but not used in the class.
+               is the epoch timestamp of the observation. Any other elements
+               will be stored in the ObsTuple object but not used in the class.
 
     ObsTuple properties:
 
@@ -1239,7 +1245,7 @@ class ObsTuple(tuple):
 # ============================================================================
 
 
-class CachedPacket():
+class CachedPacket(object):
     """Class to cache loop packet data.
 
     The purpose of the cache is to ensure that necessary fields for the
@@ -1385,6 +1391,7 @@ def calc_trend(obs_type, now_vt, units, db_manager, then_ts, grace=0):
             then = convert(then_vt, units).value
             return now - then
 
+
 def obfuscate_password(url):
     """Obfuscate the password in a URL.
 
@@ -1412,7 +1419,7 @@ def obfuscate_password(url):
     if parts.password is not None:
         # split out the host portion manually. We could use
         # parts.hostname and parts.port, but then you'd have to check
-        # if either part is None. The hostname would also be lowercased.
+        # if either part is None. The hostname would also be lower case.
         host_info = parts.netloc.rpartition('@')[-1]
         parts = parts._replace(netloc='{}:xxx@{}'.format(
             parts.username, host_info))

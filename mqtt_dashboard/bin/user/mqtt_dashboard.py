@@ -1,4 +1,4 @@
-# mqtt_dasboard.py
+# mqtt_dashboard.py
 #
 # A collection of weeWX services to support MQTT publishing of dashboard data.
 #
@@ -65,7 +65,7 @@ Abbreviated instructions for use:
 
     [[MQTT]]
         # The following MQTT settings will be appied to each of the
-        # MQTTDashboard services. Settings can be overriden in each of the
+        # MQTTDashboard services. Settings can be overridden in each of the
         # MQTTDashboard services by including a [[[MQTT]] stanza under each
         # service and including MQTT settings for that particular service.
 
@@ -324,6 +324,7 @@ import weewx.almanac
 import weewx.manager
 import weewx.tags
 import weewx.units
+import weewx.wxformulas
 
 from weeutil.weeutil import to_bool, to_float, to_int, timestamp_to_string
 from weewx.engine import StdService
@@ -337,30 +338,30 @@ def logmsg(level, msg):
     syslog.syslog(level, msg)
 
 
-def logcrit(id, msg):
-    logmsg(syslog.LOG_CRIT, '%s: %s' % (id, msg))
+def logcrit(src_id, msg):
+    logmsg(syslog.LOG_CRIT, '%s: %s' % (src_id, msg))
 
 
-def logdbg(id, msg):
-    logmsg(syslog.LOG_DEBUG, '%s: %s' % (id, msg))
+def logdbg(src_id, msg):
+    logmsg(syslog.LOG_DEBUG, '%s: %s' % (src_id, msg))
 
 
-def logdbg2(id, msg):
+def logdbg2(src_id, msg):
     if weewx.debug >= 2:
-        logmsg(syslog.LOG_DEBUG, '%s: %s' % (id, msg))
+        logmsg(syslog.LOG_DEBUG, '%s: %s' % (src_id, msg))
 
 
-def logdbg3(id, msg):
+def logdbg3(src_id, msg):
     if weewx.debug >= 3:
-        logmsg(syslog.LOG_DEBUG, '%s: %s' % (id, msg))
+        logmsg(syslog.LOG_DEBUG, '%s: %s' % (src_id, msg))
 
 
-def loginf(id, msg):
-    logmsg(syslog.LOG_INFO, '%s: %s' % (id, msg))
+def loginf(src_id, msg):
+    logmsg(syslog.LOG_INFO, '%s: %s' % (src_id, msg))
 
 
-def logerr(id, msg):
-    logmsg(syslog.LOG_ERR, '%s: %s' % (id, msg))
+def logerr(src_id, msg):
+    logmsg(syslog.LOG_ERR, '%s: %s' % (src_id, msg))
 
 
 # ============================================================================
@@ -518,10 +519,10 @@ class MQTTArchiveThread(threading.Thread):
                                                          retain=retain,
                                                          log_success=log_success)
 
-        # Set the binding to be used for data from an additonal (ie not the
+        # Set the binding to be used for data from an additional (ie not the
         # [StdArchive]) binding. Default to 'wx_binding'.
         self.additional_binding = ma_config_dict.get('additional_binding',
-                                                      'wx_binding')
+                                                     'wx_binding')
 
         # get some station info
         self.latitude = lat
@@ -532,6 +533,10 @@ class MQTTArchiveThread(threading.Thread):
         self.db_manager = None
         self.additional_manager = None
         self.stats = None
+        self.db_binder = None
+        self.converter = None
+        self.formatter = None
+        self.almanac = None
 
     def run(self):
         """Collect records from the queue and manage their processing.
@@ -552,7 +557,7 @@ class MQTTArchiveThread(threading.Thread):
         self.formatter = weewx.units.Formatter(unit_format_dict=self.format_dict)
 
         # Run a continuous loop, processing data received in the queue. Only
-        # break out if we receive the shutdown singal (None) from our parent.
+        # break out if we receive the shutdown signal (None) from our parent.
         while True:
             # Run an inner loop checking for the shutdown signal and keeping
             # the queue length from getting too long. If an archive record is
@@ -581,7 +586,7 @@ class MQTTArchiveThread(threading.Thread):
         """Process incoming record, generate and post the JSON data.
 
         Parameters:
-            packet: dict containing the just received archive record
+            record: dict containing the just received archive record
         """
 
         # get time for debug timing
@@ -595,13 +600,13 @@ class MQTTArchiveThread(threading.Thread):
                                                record['dateTime'],
                                                converter=self.converter,
                                                formatter=self.formatter)
-            temperature_C = record.get('outTemp', 15.0)
+            temperature_c = record.get('outTemp', 15.0)
             pressure_mbar = record.get('barometer', 1010.0)
             self.almanac = weewx.almanac.Almanac(record['dateTime'],
                                                  self.latitude,
                                                  self.longitude,
                                                  altitude=self.altitude_m,
-                                                 temperature=temperature_C,
+                                                 temperature=temperature_c,
                                                  pressure=pressure_mbar,
                                                  moon_phases=self.moonphases,
                                                  formatter=self.formatter)
@@ -721,7 +726,7 @@ class MQTTArchiveThread(threading.Thread):
         sun['set'] = self.almanac.sun.set.raw
         if self.almanac.hasExtras:
             sun['dayLength'] = (self.almanac(pressure=0, horizon=-34.0/60).sun.set.raw -
-                                    self.almanac(pressure=0, horizon=-34.0/60).sun.rise.raw)
+                                self.almanac(pressure=0, horizon=-34.0/60).sun.rise.raw)
         else:
             sun['dayLength'] = sun['set'] - sun['rise']
         # add sun fields to our data
@@ -908,37 +913,37 @@ class MQTTWUThread(threading.Thread):
     # Define a dictionary to look up WU icon names and return corresponding
     # Saratoga icon code
     icon_dict = {
-        'clear'             : 0,
-        'cloudy'            : 18,
-        'flurries'          : 25,
-        'fog'               : 11,
-        'hazy'              : 7,
-        'mostlycloudy'      : 18,
-        'mostlysunny'       : 9,
-        'partlycloudy'      : 19,
-        'partlysunny'       : 9,
-        'sleet'             : 23,
-        'rain'              : 20,
-        'snow'              : 25,
-        'sunny'             : 28,
-        'tstorms'           : 29,
-        'nt_clear'          : 1,
-        'nt_cloudy'         : 13,
-        'nt_flurries'       : 16,
-        'nt_fog'            : 11,
-        'nt_hazy'           : 13,
-        'nt_mostlycloudy'   : 13,
-        'nt_mostlysunny'    : 1,
-        'nt_partlycloudy'   : 4,
-        'nt_partlysunny'    : 1,
-        'nt_sleet'          : 12,
-        'nt_rain'           : 14,
-        'nt_snow'           : 16,
-        'nt_tstorms'        : 17,
-        'chancerain'        : 20,
-        'chancesleet'       : 23,
-        'chancesnow'        : 25,
-        'chancetstorms'     : 29
+        'clear': 0,
+        'cloudy': 18,
+        'flurries': 25,
+        'fog': 11,
+        'hazy': 7,
+        'mostlycloudy': 18,
+        'mostlysunny': 9,
+        'partlycloudy': 19,
+        'partlysunny': 9,
+        'sleet': 23,
+        'rain': 20,
+        'snow': 25,
+        'sunny': 28,
+        'tstorms': 29,
+        'nt_clear': 1,
+        'nt_cloudy': 13,
+        'nt_flurries': 16,
+        'nt_fog': 11,
+        'nt_hazy': 13,
+        'nt_mostlycloudy': 13,
+        'nt_mostlysunny': 1,
+        'nt_partlycloudy': 4,
+        'nt_partlysunny': 1,
+        'nt_sleet': 12,
+        'nt_rain': 14,
+        'nt_snow': 16,
+        'nt_tstorms': 17,
+        'chancerain': 20,
+        'chancesleet': 23,
+        'chancesnow': 25,
+        'chancetstorms': 29
         }
 
     def __init__(
@@ -972,9 +977,9 @@ class MQTTWUThread(threading.Thread):
 
         # get a MQTTPublisher object to do the publishing for us
         self.publisher = user.mqtt_utility.MQTTPublisher(server=server_url,
-                                                        tls=tls_opt,
-                                                        retain=retain,
-                                                        log_success=log_success)
+                                                         tls=tls_opt,
+                                                         retain=retain,
+                                                         log_success=log_success)
 
         # get WU config dictionary
         wu_config_dict = mw_config_dict.get('WU', {})
@@ -1002,14 +1007,14 @@ class MQTTWUThread(threading.Thread):
         # try [Forecast] if it exists. Wrap in a try..except loop to catch exceptions (ie one or
         # both don't exist.
         try:
-            if wu_config_dict.get('api_key') != None:
+            if wu_config_dict.get('api_key') is not None:
                 api_key = wu_config_dict.get('api_key')
-            elif config_dict['Forecast']['WU'].get('api_key', None) != None:
+            elif config_dict['Forecast']['WU'].get('api_key', None) is not None:
                 api_key = config_dict['Forecast']['WU'].get('api_key')
             else:
-                raise MissingApiKey("Cannot find valid Weather Underground API key")
+                raise user.mqtt_utility.MissingApiKey("Cannot find valid Weather Underground API key")
         except:
-            raise MissingApiKey("Cannot find Weather Underground API key")
+            raise user.mqtt_utility.MissingApiKey("Cannot find Weather Underground API key")
         # Get 'query' (ie the location) to be used for use in WU API calls.
         # Refer weewx.conf for details.
         self.query = wu_config_dict.get('location', (lat, long))
@@ -1068,8 +1073,8 @@ class MQTTWUThread(threading.Thread):
             # get the current archive record time
             now = int(record['dateTime'])
             logdbg2("mqttwuthread",
-                   "Last Weather Underground %s API call at %s" % (feature,
-                                                                   self.last[feature]))
+                    "Last Weather Underground %s API call at %s" % (feature,
+                                                                    self.last[feature]))
             # has the lockout period passed since the last call of this
             # feature?
             if self.last_call_ts is None or ((now + 1 - self.lockout_period) >= self.last_call_ts):
@@ -1083,7 +1088,7 @@ class MQTTWUThread(threading.Thread):
                                                          format='json',
                                                          max_tries=self.max_WU_tries)
                         logdbg("mqttwuthread",
-                               "Downloaded updated Weather Underground %s information" % (feature))
+                               "Downloaded updated Weather Underground %s information" % feature)
                         # if we got something back then reset our timestamp for
                         # this feature
                         if response is not None:
@@ -1098,7 +1103,7 @@ class MQTTWUThread(threading.Thread):
                                                now)
                     except:
                         loginf("mqttwuthread",
-                               "Weather Underground '%s' API query failure" % (feature))
+                               "Weather Underground '%s' API query failure" % feature)
             else:
                 # API call limiter kicked in so say so
                 loginf("mqttwuthread",
@@ -1125,11 +1130,11 @@ class MQTTWUThread(threading.Thread):
 
         # Almanac object gives more accurate results if current temp and
         # pressure are provided. Initialise some defaults.
-        temperature_C = 15.0
+        temperature_c = 15.0
         pressure_mbar = 1010.0
         # get current outTemp and barometer if they exist
         if 'outTemp' in record:
-            temperature_C = convert(weewx.units.as_value_tuple(record, 'outTemp'),
+            temperature_c = convert(weewx.units.as_value_tuple(record, 'outTemp'),
                                     "degree_C").value
         if 'barometer' in record:
             pressure_mbar = convert(weewx.units.as_value_tuple(record, 'barometer'),
@@ -1139,7 +1144,7 @@ class MQTTWUThread(threading.Thread):
                                         self.latitude,
                                         self.longitude,
                                         self.altitude_m,
-                                        temperature_C,
+                                        temperature_c,
                                         pressure_mbar)
         # work out sunrise and sunset timestamp so we can determine if it is
         # night or day
@@ -1166,10 +1171,10 @@ class MQTTWUThread(threading.Thread):
 
         # create a holder for the data we gather
         data = {}
-        # deserialise the response
+        # deserialize the response
         _response_json = json.loads(response)
         # check for recognised format
-        if not 'response' in _response_json:
+        if 'response' not in _response_json:
             loginf("mqttwuthread",
                    "Unknown format in Weather Underground '%s'" % (feature, ))
             return data
@@ -1183,12 +1188,12 @@ class MQTTWUThread(threading.Thread):
         if feature == 'forecast':
             # we have forecast data
             _fcast = _response_json['forecast']['txt_forecast']['forecastday']
-            for fcst_period in _fcast:
-                data[fcst_period['period']] = {}
-                data[fcst_period['period']]['title'] = fcst_period['title']
-                data[fcst_period['period']]['forecastIcon'] = fcst_period['icon']
-                data[fcst_period['period']]['forecastText'] = fcst_period['fcttext']
-                data[fcst_period['period']]['forecastTextMetric'] = fcst_period['fcttext_metric']
+            for fcast_period in _fcast:
+                data[fcast_period['period']] = {}
+                data[fcast_period['period']]['title'] = fcast_period['title']
+                data[fcast_period['period']]['forecastIcon'] = fcast_period['icon']
+                data[fcast_period['period']]['forecastText'] = fcast_period['fcttext']
+                data[fcast_period['period']]['forecastTextMetric'] = fcast_period['fcttext_metric']
         elif feature == 'conditions':
             # we have conditions data
             _current = _response_json['current_observation']
@@ -1262,7 +1267,7 @@ class MQTTRealtime(StdService):
                                          lat=engine.stn_info.latitude_f,
                                          long=engine.stn_info.longitude_f,
                                          alt_m=convert(engine.stn_info.altitude_vt,
-                                                     'meter').value)
+                                                       'meter').value)
         self.thread.start()
 
         # bind ourself to the relevant weeWX events
@@ -1415,7 +1420,6 @@ class MQTTRealtimeThread(threading.Thread):
         self.min_interval = to_int(mr_config_dict.get('min_interval', None))
         self.last_ts = 0  # ts (actual) of last generation
 
-
         # setup calculation options
         # do we have any?
         calc_dict = config_dict.get('Calculate', {})
@@ -1438,21 +1442,21 @@ class MQTTRealtimeThread(threading.Thread):
 
         # Get output units and decimal places
         self.temp_units = mr_config_dict['Groups'].get('group_temperature',
-                                                        'degree_C')
+                                                       'degree_C')
         self.temp_dp = to_int(mr_config_dict['DecimalPlaces'].get(self.temp_units, 2))
         self.hum_units = 'percent'
         self.hum_dp = to_int(mr_config_dict['DecimalPlaces'].get(self.hum_units, 1))
         self.pres_units = mr_config_dict['Groups'].get('group_pressure',
-                                                        'hPa')
+                                                       'hPa')
         self.pres_dp = to_int(mr_config_dict['DecimalPlaces'].get(self.pres_units, 2))
         self.wind_units = mr_config_dict['Groups'].get('group_speed',
-                                                        'km_per_hour')
+                                                       'km_per_hour')
         self.wind_dp = to_int(mr_config_dict['DecimalPlaces'].get(self.wind_units, 2))
         self.rain_units = mr_config_dict['Groups'].get('group_rain',
-                                                        'mm')
+                                                       'mm')
         self.rain_dp = to_int(mr_config_dict['DecimalPlaces'].get(self.rain_units, 2))
         self.rainrate_units = mr_config_dict['Groups'].get('group_rainrate',
-                                                            'mm_per_hour')
+                                                           'mm_per_hour')
 
         self.rainrate_dp = to_int(mr_config_dict['DecimalPlaces'].get(self.rainrate_units, 2))
         self.dir_group = 'degree_compass'
@@ -1464,13 +1468,13 @@ class MQTTRealtimeThread(threading.Thread):
         self.dist_units = mr_config_dict['Groups'].get('group_distance', 'km')
         self.dist_dp = to_int(mr_config_dict['DecimalPlaces'].get(self.dist_units, 2))
         self.alt_units = mr_config_dict['Groups'].get('group_altitude',
-                                                       'meter')
+                                                      'meter')
         self.alt_dp = to_int(mr_config_dict['DecimalPlaces'].get(self.alt_units, 2))
 
         # what units are incoming packets using, initialise to None
         self.packet_units = None
 
-        # get max cache age, defaul to 600
+        # get max cache age, default to 600
         self.max_cache_age = to_int(mr_config_dict.get('max_cache_age', 600))
 
         # Initialise last wind directions for use when respective direction is
@@ -1480,12 +1484,12 @@ class MQTTRealtimeThread(threading.Thread):
 
         # get windrun update method, loop=True, archive=False
         self.windrun_loop = to_bool(mr_config_dict.get('windrun_loop',
-                                                        False))
+                                                       False))
 
-        # Set the binding to be used for data from an additonal (ie not the
+        # Set the binding to be used for data from an additional (ie not the
         # [StdArchive]) binding. Default to 'wx_binding'.
         self.additional_binding = mr_config_dict.get('additional_binding',
-                                                      'wx_binding')
+                                                     'wx_binding')
 
         # initialise day of the week property so when know when it's a new day
         self.dow = None
@@ -1744,14 +1748,14 @@ class MQTTRealtimeThread(threading.Thread):
         # initialise our result containing dict
         data = {}
 
-        ### dateTime fields
+        # dateTime fields
         dateTime = {}
         # now
         dateTime['now'] = ts
         # add dateTime fields to our data
         data['dateTime'] = dateTime
 
-        ### outTemp fields
+        # outTemp fields
         outTemp = {}
         # now
         _outTemp_now_vt = weewx.units.as_value_tuple(packet_d, 'outTemp')
@@ -1781,7 +1785,7 @@ class MQTTRealtimeThread(threading.Thread):
         # add outTemp fields to our data
         data['outTemp'] = outTemp
 
-        ### outHumidity fields
+        # outHumidity fields
         outHumidity = {}
         # now
         outHumidity['now'] = self.format(packet_d['outHumidity'], self.hum_dp)
@@ -1803,7 +1807,7 @@ class MQTTRealtimeThread(threading.Thread):
         # add outHumidity fields to our data
         data['outHumidity'] = outHumidity
 
-        ### UV fields
+        # UV fields
         UV = {}
         # now
         UV['now'] = self.format(packet_d['UV'], self.uv_dp)
@@ -1814,7 +1818,7 @@ class MQTTRealtimeThread(threading.Thread):
         # add UV fields to our data
         data['UV'] = UV
 
-        ### radiation fields
+        # radiation fields
         radiation = {}
         # now
         radiation['now'] = self.format(packet_d['radiation'], self.rad_dp)
@@ -1826,7 +1830,7 @@ class MQTTRealtimeThread(threading.Thread):
         # add radiation fields to our data
         data['radiation'] = radiation
 
-        ### barometer fields
+        # barometer fields
         barometer = {}
         # now
         _barometer_now_vt = weewx.units.as_value_tuple(packet_d, 'barometer')
@@ -1854,7 +1858,7 @@ class MQTTRealtimeThread(threading.Thread):
         # add barometer fields to our data
         data['barometer'] = barometer
 
-        ### windchill fields
+        # windchill fields
         windchill = {}
         # now
         _windchill_now_vt = weewx.units.as_value_tuple(packet_d, 'windchill')
@@ -1870,7 +1874,7 @@ class MQTTRealtimeThread(threading.Thread):
         # add windchill fields to our data
         data['windchill'] = windchill
 
-        ### heatindex fields
+        # heatindex fields
         heatindex = {}
         # now
         _heatindex_now_vt = weewx.units.as_value_tuple(packet_d, 'heatindex')
@@ -1886,7 +1890,7 @@ class MQTTRealtimeThread(threading.Thread):
         # add heatindex fields to our data
         data['heatindex'] = heatindex
 
-        ### dewpoint fields
+        # dewpoint fields
         dewpoint = {}
         # now
         _dewpoint_now_vt = weewx.units.as_value_tuple(packet_d, 'dewpoint')
@@ -1912,7 +1916,7 @@ class MQTTRealtimeThread(threading.Thread):
         # add dewpoint fields to our data
         data['dewpoint'] = dewpoint
 
-        ### appTemp fields
+        # appTemp fields
         appTemp = {}
         # now
         _appTemp_now_vt = weewx.units.as_value_tuple(packet_d, 'appTemp')
@@ -1933,20 +1937,20 @@ class MQTTRealtimeThread(threading.Thread):
         # add appTemp fields to our data
         data['appTemp'] = appTemp
 
-        ### humidex fields
+        # humidex fields
         humidex = {}
         # now
         if 'humidex' in packet_d:
             _humidex_now_vt = weewx.units.as_value_tuple(packet_d, 'humidex')
         elif 'outTemp' in packet_d and 'outHumidity' in packet_d:
             if packet_d['usUnits'] == weewx.US:
-                _humidex_F = wxformulas.humidexF(packet_d['outTemp'],
-                                                 packet_d['outHumidity'])
+                _humidex_F = weewx.wxformulas.humidexF(packet_d['outTemp'],
+                                                       packet_d['outHumidity'])
                 _humidex_now_vt = ValueTuple(_humidex_F, 'degree_F',
                                              'group_temperature')
             else:
-                _humidex_C = wxformulas.humidexC(packet_d['outTemp'],
-                                                 packet_d['outHumidity'])
+                _humidex_C = weewx.wxformulas.humidexC(packet_d['outTemp'],
+                                                       packet_d['outHumidity'])
                 _humidex_now_vt = ValueTuple(_humidex_C, 'degree_C',
                                              'group_temperature')
         else:
@@ -1956,7 +1960,7 @@ class MQTTRealtimeThread(threading.Thread):
         # add humidex fields to our data
         data['humidex'] = humidex
 
-        ### wind fields
+        # wind fields
         wind = {}
         # windSpeed
         wind['windSpeed'] = {}
@@ -1995,7 +1999,7 @@ class MQTTRealtimeThread(threading.Thread):
         # add wind fields to our data
         data['wind'] = wind
 
-        ### rain fields
+        # rain fields
         rain = {}
         # today
         _rain_vt = ValueTuple(self.buffer['rain'].day_sum, b_rain_unit,
@@ -2038,5 +2042,3 @@ class MQTTRealtimeThread(threading.Thread):
             return value
         else:
             return round(value, places)
-
-
