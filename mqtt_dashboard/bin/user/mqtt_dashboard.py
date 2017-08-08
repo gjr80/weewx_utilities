@@ -566,6 +566,9 @@ class MQTTArchiveThread(threading.Thread):
                 _package = self.queue.get()
                 if _package is None:
                     # None is our signal to exit
+                    # disconnect cleanly if we have already connected
+                    if self.publisher:
+                        self.publisher.disconnect()
                     return
                 # if packets have backed up in the queue, trim it until it's no
                 # bigger than the max allowed backlog
@@ -612,6 +615,8 @@ class MQTTArchiveThread(threading.Thread):
                                                  formatter=self.formatter)
             # get a data dict from which to construct our JSON data
             data = self.calculate(record)
+            # connect to the mqtt broker
+            self.publisher.connect()
             # publish the data
             self.publisher.publish(self.topic,
                                    json.dumps(data),
@@ -1038,6 +1043,9 @@ class MQTTWUThread(threading.Thread):
                     _package = self.queue.get()
                     if _package is None:
                         # None is our signal to exit
+                        # disconnect cleanly if we have already connected
+                        if self.publisher:
+                            self.publisher.disconnect()
                         return
                     # if packets have backed up in the queue, trim it until it's no
                     # bigger than the max allowed backlog
@@ -1085,32 +1093,42 @@ class MQTTWUThread(threading.Thread):
                     try:
                         response = self.api.data_request(features=feature,
                                                          query=self.query,
-                                                         format='json',
+                                                         resp_format='json',
                                                          max_tries=self.max_WU_tries)
                         logdbg("mqttwuthread",
                                "Downloaded updated Weather Underground %s information" % feature)
-                        # if we got something back then reset our timestamp for
-                        # this feature
-                        if response is not None:
-                            self.last[feature] = now
-                        # parse the WU response and create a dict to publish
-                        _data = self.parse_WU_response(feature, response)
-                        # timestamp the data to be posted
-                        _data['last_updated'] = now
-                        # publish to MQTT broker
-                        self.publisher.publish(self.topic[feature],
-                                               json.dumps(_data),
-                                               now)
-                    except:
+                    except Exception, e:
+                        # Some unknown exception occurred. Log it and continue.
                         loginf("mqttwuthread",
-                               "Weather Underground '%s' API query failure" % feature)
+                               "Unexpected exception of type %s" % (type(e), ))
+                        weeutil.weeutil.log_traceback('mqttwuthread: **** ')
+                        loginf("mqttwuthread",
+                               "Unexpected exception of type %s" % (type(e), ))
+                        loginf("mqttwuthread",
+                               "Weather Underground '%s' API query failed" % feature)
+                        continue
+                    # if we got something back then reset our timestamp for
+                    # this feature
+                    if response is not None:
+                        self.last[feature] = now
+                    # parse the WU response and create a dict to publish
+                    _data = self.parse_WU_response(feature, response)
+
+                    # timestamp the data to be posted
+                    _data['last_updated'] = now
+                    # connect to our mqtt broker
+                    self.publisher.connect()
+                    # publish to MQTT broker
+                    self.publisher.publish(self.topic[feature],
+                                           json.dumps(_data),
+                                           now)
             else:
                 # API call limiter kicked in so say so
                 loginf("mqttwuthread",
                        "Tried to make an API call within %d sec of the previous call." % (self.lockout_period, ))
                 loginf("            ",
                        "API call limit reached. API call skipped.")
-                break
+                continue
         # get the last API call timestamp
         self.last_call_ts = max(self.last[q] for q in self.last)
 
