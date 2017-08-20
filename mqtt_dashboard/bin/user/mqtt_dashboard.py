@@ -691,7 +691,7 @@ class MQTTArchiveThread(threading.Thread):
                 _run = to_float(self.formatter.toString(_run_c, addLabel=False))
             except TypeError:
                 _run = None
-            wind['windrun']['yest'] = _run
+        wind['windrun']['yest'] = _run
         # add wind fields to our data
         data['wind'] = wind
 
@@ -1547,13 +1547,16 @@ class MQTTRealtimeThread(threading.Thread):
         if self.additional_binding:
             self.additional_manager = weewx.manager.open_manager_with_config(self.config_dict,
                                                                              self.additional_binding)
+        # save the ts as the ts of the last received archive record
+        self.last_archive_ts = self.db_manager.lastGoodStamp()
         # initialise our day stats
-        self.day_stats = self.db_manager._get_day_summary(time.time())
+        self.day_stats = self.db_manager._get_day_summary(self.last_archive_ts)
         # set the unit system for our day stats
         self.day_stats.unit_system = self.db_manager.std_unit_system
-        # initialise our day stats from our 'additional' source
+        # initialise our day stats from our 'additional' source time
         if self.additional_manager:
-            self.additional_day_stats = self.additional_manager._get_day_summary(time.time())
+            _add_ts = self.additional_manager.lastGoodStamp()
+            self.additional_day_stats = self.additional_manager._get_day_summary(_add_ts)
             # set the unit system for our additional day stats
             self.additional_day_stats.unit_system = self.additional_manager.std_unit_system
 
@@ -1562,9 +1565,8 @@ class MQTTRealtimeThread(threading.Thread):
                                                additional_day_stats=self.additional_day_stats)
 
         # setup our loop cache and set some starting wind values
-        _ts = self.db_manager.lastGoodStamp()
-        if _ts is not None:
-            _rec = self.db_manager.getRecord(_ts)
+        if self.last_archive_ts is not None:
+            _rec = self.db_manager.getRecord(self.last_archive_ts)
         else:
             _rec = {'usUnits': None}
         # get a CachedPacket object as our loop packet cache and prime it with
@@ -1763,6 +1765,8 @@ class MQTTRealtimeThread(threading.Thread):
                                                           'windSpeed')
         (b_rain_unit, b_rain_group) = getStandardUnitType(self.buffer.primary_unit_system,
                                                           'rain')
+        (b_dist_unit, b_dist_group) = getStandardUnitType(self.buffer.primary_unit_system,
+                                                          'windrun')
         # initialise our result containing dict
         data = {}
 
@@ -2014,6 +2018,14 @@ class MQTTRealtimeThread(threading.Thread):
         wind['windGust']['today']['max_dir'] = self.format(self.buffer['wind'].day_max_dir,
                                                            self.dir_dp)
         wind['windGust']['today']['max_t'] = self.buffer['wind'].day_maxtime
+
+        # windrun
+        wind['windrun'] = {}
+        # today
+        _windrun_vt = ValueTuple(self.buffer.windrun, b_dist_unit, b_dist_group)
+        _windrun = weewx.units.convert(_windrun_vt, self.dist_units).value
+        wind['windrun']['today'] = self.format(_windrun, self.dist_dp)
+        loginf("MQTTRealtimeThread", "wind['windrun']['today']=%s" % (wind['windrun']['today'],))
         # add wind fields to our data
         data['wind'] = wind
 
