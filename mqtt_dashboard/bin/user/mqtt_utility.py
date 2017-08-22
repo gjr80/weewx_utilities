@@ -284,7 +284,7 @@ class MQTTPublisher(object):
     def connect(self, client_id=None):
         """Connect to a MQTT broker.
 
-        Connect to a broker, or a previous connection exists attempt to
+        Connect to a broker, or if a previous connection exists attempt to
         reconnect. A successful connection results in the mqtt_client property
         being set to the Client object.
 
@@ -301,20 +301,28 @@ class MQTTPublisher(object):
                        default) will result in a unique ID being auto-generated.
         """
 
+        # do we have a client object
         if self.mqtt_client:
-            try:
-                self.mqtt_client.reconnect()
-            except (socket.error, socket.timeout, socket.herror), e:
-                loginf("mqttpublisher", "socket error: %s" % (e,))
+            # We have a client object but are we connected? If not connected
+            # then attempt to reconnect, otherwise continue.
+            if not self.mqtt_client.connected:
+                # wrap the reconnect in a try block to catch any socket errors
+                try:
+                    self.mqtt_client.reconnect()
+                except (socket.error, socket.timeout, socket.herror), e:
+                    loginf("mqttpublisher", "socket error: %s" % (e,))
         else:
-            # get a Paho client object
+            # we don't have a client so we need to create one and then connect
+            # first get a Paho client object
             _client = mqtt.Client(client_id)
             # setup the client callbacks
             _client.on_connect = self.on_connect
             _client.on_disconnect = self.on_disconnect
             _client.on_publish = self.on_publish
             # initialise some flags
+            # connected flag, True if we are connected to our broker
             _client.connected = False
+            # decoded error paho connection message
             _client.conn_error_msg = None
             # parse the MQTT server URL
             url = urlparse.urlparse(self.server)
@@ -327,7 +335,8 @@ class MQTTPublisher(object):
                 _client.tls_set(**self.tls_dict)
             # get a timestamp to base any timeout on
             _start_ts = time.time()
-            # connect to the broker, wrap in a try..except in case we have a socket error
+            # connect to the broker, wrap in a try..except in case we have a
+            # socket error
             try:
                 # connect to the MQTT broker
                 _client.connect(url.hostname, url.port)
@@ -336,9 +345,9 @@ class MQTTPublisher(object):
             # start the network loop so our callbacks can react
             _client.loop_start()
             # Wait and see if we have a successful connection. If we do the
-            # on_connect callback will set the connected flag and we can continue.
-            # If we don't get a connection after our timeout then raise an
-            # exception.
+            # on_connect callback will set the connected flag and we can
+            # continue. If we don't get a connection after our timeout then
+            # raise an exception.
             while not _client.connected:
                 # if we have timed out then raise
                 if time.time() > self.timeout + _start_ts:
@@ -356,6 +365,7 @@ class MQTTPublisher(object):
 
         # disconnect if we have a client that has been connected
         if self.mqtt_client:
+            # call the paho client disconnect method
             self.mqtt_client.disconnect()
             # not sure if you could get a timeout on a disconnection but will
             # cover it in any case
