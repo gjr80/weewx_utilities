@@ -2025,7 +2025,6 @@ class MQTTRealtimeThread(threading.Thread):
         _windrun_vt = ValueTuple(self.buffer.windrun, b_dist_unit, b_dist_group)
         _windrun = weewx.units.convert(_windrun_vt, self.dist_units).value
         wind['windrun']['today'] = self.format(_windrun, self.dist_dp)
-        loginf("MQTTRealtimeThread", "wind['windrun']['today']=%s" % (wind['windrun']['today'],))
         # add wind fields to our data
         data['wind'] = wind
 
