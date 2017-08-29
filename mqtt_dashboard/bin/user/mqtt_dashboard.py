@@ -1994,6 +1994,11 @@ class MQTTRealtimeThread(threading.Thread):
         wind['windSpeed']['today'] = {}
         wind['windSpeed']['today']['avg'] = self.format(self.buffer['wind'].day_vec_avg,
                                                         self.wind_dp)
+        # 10 minutes
+        wind['windSpeed']['10min'] = {}
+        _avg_speed, _avg_dir = self.buffer['wind'].history_vec_avg(ts, age=600)
+        wind['windSpeed']['10min']['avg'] = self.format(_avg_speed, 
+                                                        self.wind_dp)
         # windDir
         wind['windDir'] = {}
         # now
@@ -2002,6 +2007,9 @@ class MQTTRealtimeThread(threading.Thread):
         wind['windDir']['today'] = {}
         wind['windDir']['today']['avg'] = self.format(self.buffer['wind'].day_vec_dir,
                                                       self.dir_dp)
+        # 10 minutes
+        wind['windDir']['10min'] = {}
+        wind['windDir']['10min']['avg'] = self.format(_avg_dir, self.dir_dp)
         # windGust
         wind['windGust'] = {}
         # now

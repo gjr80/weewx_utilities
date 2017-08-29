@@ -744,7 +744,7 @@ class Buffer(dict):
             # so we need to divide by 3600 to get our real windrun in km
             windrun = _wr_km/3600.0
         else:
-            windrun = 0.0
+            windrun = None
         return windrun
 
     def add_packet(self, packet):
@@ -783,7 +783,11 @@ class Buffer(dict):
         # update today's windrun
         if 'windSpeed' in packet:
             try:
-                self.windrun += packet['windSpeed'] * (packet['dateTime'] - self.last_windSpeed_ts)/1000.0
+                _windrun = packet['windSpeed'] * (packet['dateTime'] - self.last_windSpeed_ts)/1000.0
+                if self.windrun is not None:
+                    self.windrun += _windrun
+                else:
+                    self.windrun = _windrun
             except TypeError:
                 pass
             self.last_windSpeed_ts = packet['dateTime']
@@ -1026,10 +1030,13 @@ class VectorBuffer(object):
             _dir = 90.0 - math.degrees(math.atan2(y, x))
             if _dir < 0.0:
                 _dir += 360.0
-            _value = math.sqrt(pow(x, 2) + pow(y, 2))
+            try:
+                _value = math.sqrt(pow(x, 2) + pow(y, 2)) / len(rec)
+            except ZeroDivisionError:
+                _value = None
             return _value, _dir
         else:
-            return None
+            return None, None
 
     @property
     def day_vec_avg(self):
