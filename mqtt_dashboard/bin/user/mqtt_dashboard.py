@@ -762,26 +762,20 @@ class MQTTArchiveThread(threading.Thread):
                                 self.almanac.next_new_moon.raw])
             next_phases.append(["First Quarter",
                                 self.almanac.next_first_quarter_moon.raw])
-            next_ph = min(next_phases, key=operator.itemgetter(1))
             # get the next 4 phases in chrono order
             _sorted = sorted(next_phases, key=operator.itemgetter(1))
             moon['lastPhase'] = {}
             moon['lastPhase']['name'] = prev_ph[0]
             moon['lastPhase']['date'] = prev_ph[1]
-            moon['nextPhase'] = {}
-            moon['nextPhase']['name'] = next_ph[0]
-            moon['nextPhase']['date'] = next_ph[1]
             moon['nextPhases'] = {}
             moon['nextPhases'] = _sorted
         else:
+            # no pyephem so no moon data
             moon['rise'] = None
             moon['set'] = None
             moon['lastPhase'] = {}
             moon['lastPhase']['name'] = None
             moon['lastPhase']['date'] = None
-            moon['nextPhase'] = {}
-            moon['nextPhase']['name'] = None
-            moon['nextPhase']['date'] = None
             moon['nextPhases'] = {}
         # add moon fields to our data
         data['moon'] = moon
