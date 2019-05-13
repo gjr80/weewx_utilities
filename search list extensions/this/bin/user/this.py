@@ -26,8 +26,9 @@ Revision History
 
 This SLE allows the user to iterate over a 'this' time span (eg this day, this
 week or this month) in a given set of records. The default 'this' period is the
-current day, for example, each 12 May for each year for which WeeWX has data. The
-syntax used is similar to the iteration syntax used by the existing tag system.
+current day, for example, each 12 May for each year for which WeeWX has data.
+The default set of records is all records in the WeeWX archive. The syntax used
+is similar to the iteration syntax used by the existing tag system.
 
 Consider a WeeWX installation that has data from 1 January 2010 to 12 May 2019,
 the following code used in a template, and run on 12 May 2019, would display the
@@ -58,16 +59,17 @@ would display the maximum temperature and the time that it occurred on the
 current week and month each year from 2010 to 2019 respectively.
 
 By default this day, this week and this month use day, week and month spans
-based on the current report time. This time can be changed by use of the
-optional $day_delta, $week_delta, $year_delta and $timestamp parameters. For
-example, instead of displaying data for the current day in all years, data can
-be displayed for yesterday for all years by using $day_delta=1:
+based on the current report time. This time can be changed by use of one or
+more of the optional $day_delta, $week_delta, $year_delta and $timestamp
+parameters. For example, instead of displaying data for the current day in all
+years, data can be displayed for yesterday for all years by using $day_delta=1:
 
     #for $day in $this_span.this($day_delta=1)
     $day.outTemp.max at $day.outTemp.maxtime
     #end for
 
-Similarly an absolute timestamp can be used through use of the $timestamp parameter, for example:
+Similarly an absolute timestamp can be used through use of the $timestamp
+parameter, for example:
 
     #import time
     #set $now=time.time()
@@ -78,12 +80,30 @@ Similarly an absolute timestamp can be used through use of the $timestamp parame
 
 would also display data for yesterday over all years.
 
-Use of $this_span will iterate over the entire archive use the entire
+Use of $this_span will iterate over the entire archive. This period can be
+limited by use of one or more of the optional time_delta, hour_delta,
+day_delta, week_delta, month_delta or year_delta parameters with the $this_span
+tag. For example, the following code would display maximum temperature data for
+this day over the last two years only:
+
+    #for $day in $this_span($year_delta=2).this
+    $day.outTemp.max at $day.outTemp.maxtime
+    #end for
+
+Data can also be obtained from any database for which a database binding has
+been defined through use of the $data_binding parameter with the $this_span tag:
+
+    #for $day in $this_span($data_binding='my_binding').this
+    $day.outTemp.max at $day.outTemp.maxtime
+    #end for
+
+The $data_binding operates exactly the same as implemented elsewhere in the
+WeeWX tag system.
 
 All WeeWX tag options (eg aggregates, unit conversion ,formatting etc) are
 supported.
 
-Some example usage:
+Some additional example usage:
 
     maximum ouTemp and time it occurred on this day over all recorded years:
 
@@ -117,11 +137,11 @@ $BIN_ROOT/user directory:
 
     for a setup.py install:
 
-    $ wget -P /home/weewx/bin/user
+    $ wget -P /home/weewx/bin/user https://raw.githubusercontent.com/gjr80/weewx_utilities/master/search%20list%20extensions/this/bin/user/this.py
 
     otherwise:
 
-    $ wget -P /usr/share/weewx/user
+    $ wget -P /usr/share/weewx/user https://raw.githubusercontent.com/gjr80/weewx_utilities/master/search%20list%20extensions/this/bin/user/this.py
 
 2.  Add the following line to the skin config file [CheetahGenerator] stanza
 for the skin in which the SLE is to be used:
@@ -133,8 +153,7 @@ for the skin in which the SLE is to be used:
 
     search_list_extensions = user,another.SLE, user.this.ThisSLE
 
-3.  Add the required code .thisday/.thisweek/.thismonth code to the template
-concerned.
+3.  Add the required .this code to the template concerned.
 
 4.  After the next report cycle is complete confirm there are no errors in the
 log and the report has been generated as expected.
@@ -203,14 +222,23 @@ class ThisTimeBinder(object):
 
     Specialised version of weewx.tags.TimeBinder to support 'this' tags.
 
-    Supported time periods are this_alltime and span. When a time period is given as
-    an attribute to it the next item in the chain is returned, in this case an
-    instance of TimespanBinder, which binds things to a timespan.
+    Supports time period 'this_span'. When a time period is given as an
+    attribute to it the next item in the chain is returned, in this case an
+    instance of ThisTimespanBinder, which binds to a timespan.
+
+    this_span defaults to a universe of all records in the WeeWX archive. This
+    universe may be limited by use of one or more xxxx_delta parameters,
+    for example:
+
+        #for $day in $this_span($year_delta=2)
+
+    to use the period exactly two years ago to the current report timestamp.
     """
 
     def __init__(self, db_lookup, report_time, formatter=weewx.units.Formatter(),
                  converter=weewx.units.Converter(), **option_dict):
 
+        # store various parameters received for later use
         self.db_lookup = db_lookup
         self.report_time = report_time
         self.formatter = formatter
@@ -221,11 +249,17 @@ class ThisTimeBinder(object):
                   week_delta=0, month_delta=0, year_delta=0):
         """Return a ThisTimespanBinder bound to a user specified time span."""
 
-        if any([time_delta, hour_delta, day_delta, week_delta, month_delta, year_delta]):
+        # determine what time span is our universe of data, if no xxx_deltas
+        # are specified then we use all records
+        if any([time_delta, hour_delta, day_delta,
+                week_delta, month_delta, year_delta]):
             # we have at least one delta setting so use it
-            _span = weeutil.weeutil.archiveSpanSpan(self.report_time, time_delta=time_delta,
-                                                    hour_delta=hour_delta, day_delta=day_delta,
-                                                    week_delta=week_delta, month_delta=month_delta,
+            _span = weeutil.weeutil.archiveSpanSpan(self.report_time,
+                                                    time_delta=time_delta,
+                                                    hour_delta=hour_delta,
+                                                    day_delta=day_delta,
+                                                    week_delta=week_delta,
+                                                    month_delta=month_delta,
                                                     year_delta=year_delta)
         else:
             # all deltas are zero (or None) so assume an alltime span
@@ -234,13 +268,17 @@ class ThisTimeBinder(object):
             # obtain the earliest and latest timestamps in the archive
             start_ts = db_manager.firstGoodStamp()
             end_ts = db_manager.lastGoodStamp()
-            # construct a TimeSpan object to cover the entire time span covered by
-            # the archive
+            # construct a TimeSpan object to cover the entire time span covered
+            # by the archive
             _span = TimeSpan(start_ts, end_ts)
         # return the next object in the chain
-        return ThisTimespanBinder(_span, self.report_time, self.db_lookup,
-                                  data_binding=data_binding, context='day',
-                                  formatter=self.formatter, converter=self.converter,
+        return ThisTimespanBinder(_span,
+                                  self.report_time,
+                                  self.db_lookup,
+                                  data_binding=data_binding,
+                                  context='day',
+                                  formatter=self.formatter,
+                                  converter=self.converter,
                                   **self.option_dict)
 
 
@@ -258,14 +296,6 @@ class ThisTimespanBinder(object):
     next item in the chain is returned, in this case an instance of
     ObservationBinder, which binds the database, the time period, and the
     statistical type all together.
-
-    It also includes a few "special attributes" that allow iteration over certain
-    time periods. Example:
-
-       # Iterate by month:
-       for monthStats in yearStats.months:
-           # Print maximum temperature for each month in the year:
-           print monthStats.outTemp.max
     """
     def __init__(self, timespan, report_time, db_lookup, data_binding=None,
                  context='day', formatter=weewx.units.Formatter(),
@@ -306,7 +336,7 @@ class ThisTimespanBinder(object):
                                month_delta=month_delta,
                                year_delta=year_delta)
 
-        # iterate over 'this' day in the time period
+        # iterate over 'this' period in the time period
         return ThisTimespanBinder._seq_generator(this_span,
                                                  self.timespan,
                                                  ts,
@@ -321,37 +351,52 @@ class ThisTimespanBinder(object):
     @staticmethod
     def _seq_generator(gen_span_func, timespan, report_time, span_func,
                        *args, **option_dict):
-        """ Generator function that returns ThisTimespanBinder object.
+        """ Generator function that returns ThisTimespanBinder objects.
 
-        for the appropriate timespans
+        Uses gen_span_func to obtain the appropriate timespans.
         """
 
         for span in gen_span_func(timespan.start, timespan.stop,
                                   report_time, span_func):
             yield ThisTimespanBinder(span, report_time, *args, **option_dict)
 
-    # return the start time of the time period as a ValueHelper
     @property
     def start(self):
-        val = weewx.units.ValueTuple(self.timespan.start, 'unix_epoch', 'group_time')
-        return weewx.units.ValueHelper(val, self.context, self.formatter, self.converter)
+        """Return the start time of a time period as a ValueHelper."""
 
-    # return the end time of the time period as a ValueHelper
+        val = weewx.units.ValueTuple(self.timespan.start,
+                                     'unix_epoch',
+                                     'group_time')
+        return weewx.units.ValueHelper(val,
+                                       self.context,
+                                       self.formatter,
+                                       self.converter)
+
     @property
     def end(self):
-        val = weewx.units.ValueTuple(self.timespan.stop, 'unix_epoch', 'group_time')
-        return weewx.units.ValueHelper(val, self.context, self.formatter, self.converter)
+        """Return the end time of a time period as a ValueHelper."""
+
+        val = weewx.units.ValueTuple(self.timespan.stop,
+                                     'unix_epoch',
+                                     'group_time')
+        return weewx.units.ValueHelper(val,
+                                       self.context,
+                                       self.formatter,
+                                       self.converter)
 
     # alias for the start time:
     dateTime = start
 
     def __getattr__(self, obs_type):
-        """ Return a helper object that binds the database, a time period,
+        """Return a the next helper in the chain.
+
+        Returns a helper object that binds the database, a time period,
         and the given observation type.
 
         obs_type: An observation type, such as 'outTemp', or 'heatDeg'
 
-        returns: An instance of class ObservationBinder."""
+        returns: An instance of class weewx.tags.ObservationBinder.
+        """
 
         # this is to get around bugs in the Python version of Cheetah's
         # namemapper
