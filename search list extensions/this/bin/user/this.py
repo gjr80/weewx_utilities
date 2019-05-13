@@ -159,8 +159,6 @@ for the skin in which the SLE is to be used:
 log and the report has been generated as expected.
 """
 
-# TODO. Confirm correct operation on 29 February
-
 # python imports
 import datetime
 import time
