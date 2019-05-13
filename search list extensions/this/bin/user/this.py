@@ -431,8 +431,15 @@ def this_span(start_ts, stop_ts, ts, span_func):
     # iterate over each year from start to end and calculate the timespan of
     # interest
     for year_no in range(start_year, stop_year + 1):
-        # replace the year in the datetime object representing the report time
-        year_dt = dt.replace(year=year_no)
+        # replace the year in the datetime object representing the report time,
+        # be prepared to catch the error if it is 29 February and we try to
+        # change the year to a non-leap year
+        try:
+            year_dt = dt.replace(year=year_no)
+        except ValueError:
+            # it's 29 February and we tried to use a non-leap year, just skip
+            # this year and continue to the next
+            continue
         # convert the modified datetime object to an epoch timestamp
         year_ts = time.mktime(year_dt.timetuple())
         # if year_ts is not in our timespan of interest then skip it
