@@ -35,23 +35,23 @@ the following code used in a template, and run on 12 May 2019, would display the
 maximum temperature and the time that it occurred on 12 May each year from 2010
 to 2019:
 
-    #for $day in $this_span.this
+    #for $day in $this_span.periods
     $day.outTemp.max at $day.outTemp.maxtime
     #end for
 
 If run on the following day, it would display data for each 13 May from 2010 to
 2019.
 
-.this supports time spans of the current week and current month by including
+.periods supports time spans of the current week and current month by including
 the optional $period parameter, for example:
 
-    #for $week in $this_span.this($period='week')
+    #for $week in $this_span.periods($period='week')
     $week.outTemp.max at $week.outTemp.maxtime
     #end for
 
     and
 
-    #for $month in $this_span.this($period='month')
+    #for $month in $this_span.periods($period='month')
     $month.outTemp.max at $month.outTemp.maxtime
     #end for
 
@@ -64,7 +64,7 @@ more of the optional $day_delta, $week_delta, $year_delta and $timestamp
 parameters. For example, instead of displaying data for the current day in all
 years, data can be displayed for yesterday for all years by using $day_delta=1:
 
-    #for $day in $this_span.this($day_delta=1)
+    #for $day in $this_span.periods($day_delta=1)
     $day.outTemp.max at $day.outTemp.maxtime
     #end for
 
@@ -74,7 +74,7 @@ parameter, for example:
     #import time
     #set $now=time.time()
 
-    #for $day in $this_span.this($timestamp=$now-86400)
+    #for $day in $this_span.periods($timestamp=$now-86400)
     $day.outTemp.max at $day.outTemp.maxtime
     #end for
 
@@ -86,14 +86,14 @@ day_delta, week_delta, month_delta or year_delta parameters with the $this_span
 tag. For example, the following code would display maximum temperature data for
 this day over the last two years only:
 
-    #for $day in $this_span($year_delta=2).this
+    #for $day in $this_span($year_delta=2).periods
     $day.outTemp.max at $day.outTemp.maxtime
     #end for
 
 Data can also be obtained from any database for which a database binding has
 been defined through use of the $data_binding parameter with the $this_span tag:
 
-    #for $day in $this_span($data_binding='my_binding').this
+    #for $day in $this_span($data_binding='my_binding').periods
     $day.outTemp.max at $day.outTemp.maxtime
     #end for
 
@@ -107,26 +107,26 @@ Some additional example usage:
 
     maximum ouTemp and time it occurred on this day over all recorded years:
 
-        #for $day in $this_span.this
+        #for $day in $this_span.periods
         $day.outTemp.max at $day.outTemp.maxtime
         #end for
 
     year and total daily rainfall on this day over all recorded years:
 
-        #for $day in $this_span.thisday
+        #for $day in $this_span.periods
         $day.dateTime.format("%Y"): $day.rain.sum
         #end for
 
     maximum outTemp in Fahrenheit and time it occurred in this month over all
     recorded years:
 
-        #for $month in $this_span.thismonth
+        #for $month in $this_span.periods($period='month')
         $month.outTemp.max.degree_F at $month.outTemp.maxtime
         #end for
 
     maximum ouTemp and time it occurred on this day over all recorded years:
 
-        #for $day in $this_span.thisday($timestamp=123456789)
+        #for $day in $this_span.periods($timestamp=123456789)
         $day.outTemp.max at $day.outTemp.maxtime
         #end for
 
@@ -151,9 +151,9 @@ for the skin in which the SLE is to be used:
     if the search_list_extensions config option already exists add
     user.this.ThisSLE to the end of the option using a comma as a separator, eg:
 
-    search_list_extensions = user,another.SLE, user.this.ThisSLE
+    search_list_extensions = user.another.SLE, user.this.ThisSLE
 
-3.  Add the required .this code to the template concerned.
+3.  Add the required $this_span.periods code to the template concerned.
 
 4.  After the next report cycle is complete confirm there are no errors in the
 log and the report has been generated as expected.
@@ -308,8 +308,8 @@ class ThisTimespanBinder(object):
         self.converter = converter
         self.option_dict = option_dict
 
-    def this(self, period='day', timestamp=None, day_delta=0, week_delta=0,
-             month_delta=0, year_delta=0):
+    def periods(self, period='day', timestamp=None, day_delta=0, week_delta=0,
+                month_delta=0, year_delta=0):
 
         # determine the span calculation function and context to be
         # used
@@ -335,7 +335,7 @@ class ThisTimespanBinder(object):
                                year_delta=year_delta)
 
         # iterate over 'this' period in the time period
-        return ThisTimespanBinder._seq_generator(this_span,
+        return ThisTimespanBinder._seq_generator(period_span,
                                                  self.timespan,
                                                  ts,
                                                  span_func,
@@ -417,7 +417,7 @@ class ThisTimespanBinder(object):
 #                              Utility Functions
 # ==============================================================================
 
-def this_span(start_ts, stop_ts, ts, span_func):
+def period_span(start_ts, stop_ts, ts, span_func):
     """ Generator function to return timespans over a period."""
 
     # obtain the year to start from
