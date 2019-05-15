@@ -24,11 +24,10 @@ Revision History
         - initial release
 
 
-This SLE allows the user to iterate over a 'this' time span (eg this day, this
-week or this month) in a given set of records. The default 'this' period is the
-current day, for example, each 12 May for each year for which WeeWX has data.
-The default set of records is all records in the WeeWX archive. The syntax used
-is similar to the iteration syntax used by the existing tag system.
+This SLE allows iteration over a time span calculating statistics for the same
+period (day, week or month) in each year. The default time span over which
+iteration occurs is all records in the WeeWX archive and the default period
+over which the statistics are calculated is the current day of the year.
 
 Consider a WeeWX installation that has data from 1 January 2010 to 12 May 2019,
 the following code used in a template, and run on 12 May 2019, would display the
