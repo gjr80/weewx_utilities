@@ -1,0 +1,361 @@
+#!/usr/bin/python
+"""
+A WeeWX utility to manage corrupt/incorrect rain data.
+
+Copyright (C) 2019 Gary Roderick              gjroderick<at>gmail.com
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program.  If not, see http://www.gnu.org/licenses/.
+
+Version: 0.1.0                                      Date: 17 March 2019
+
+Revision History
+  17 March 2019        v0.1.0
+      - initial release
+"""
+# Python imports
+import datetime
+import optparse
+import sys
+import syslog
+import time
+
+from distutils.version import StrictVersion
+
+# WeeWX imports
+import weecfg.database
+import weeutil.weeutil
+import weewx
+import weewx.manager
+import weewx.units
+
+from weeutil.weeutil import timestamp_to_string
+
+# weewx_rain version number
+WEEWX_RAIN_VERSION = '0.1.0'
+# minimum WeeWX version required for this version of weewx_rain
+REQUIRED_WEEWX = "3.0.0"
+
+usage = """weewx_rain --help
+       weewx_rain --version
+       weewx_rain --show-rain
+            [--config=CONFIG_FILE]
+            [--date=YYYY-mm-dd[THH:MM] | --from=YYYY-mm-dd[THH:MM] --to=YYYY-mm-dd[THH:MM]]
+       weewx_rain --clear-rain
+            [--config=CONFIG_FILE]
+            [--date=YYYY-mm-dd | --from=YYYY-mm-dd[THH:MM] --to=YYYY-mm-dd[THH:MM]]
+            [--dry-run]
+            [--query]
+
+Description:
+
+Manipulate rain data in the WeeWX database. The removal of incorrect rain data 
+from the WeeWX database is a complex largely manual process. The weewx_rain 
+utility aids in the location and removal of incorrect rainfall data from the 
+WeeWX database."""
+
+# List of 'dest' settings used by our 'verbs', note 'dest' may be explicit or
+# implicit. If adding more 'verbs' need to add corresponding 'dest' here.
+dest_list = ['show-rain', 'version']
+
+
+def main():
+
+    # set defaults for the system logger
+    syslog.openlog('weewx_rain', syslog.LOG_PID | syslog.LOG_CONS)
+
+    # create a command line parser
+    parser = optparse.OptionParser(usage=usage)
+
+    # add the various options:
+    parser.add_option("--config", dest="config_path", type=str,
+                      metavar="CONFIG_FILE",
+                      help="Use configuration file CONFIG_FILE.")
+    parser.add_option("--show-rain", dest="show_rain", action="store_true",
+                      help="Display non-zero rainfall recorded in the archive.")
+    parser.add_option("--dry-run", dest="dry_run", action="store_true",
+                      help="Print what would happen but do not do it.")
+    parser.add_option("--date", dest="date", type=str, metavar="YYYY-mm-dd",
+                      help="Process data for this date. Format is YYYY-mm-dd.")
+    parser.add_option("--from", dest="date_from", type=str, metavar="YYYY-mm-dd[THH:MM]",
+                      help="Process data starting at this date or date-time. "
+                           "Format is YYYY-mm-dd[THH:MM].")
+    parser.add_option("--to", dest="date_to", type=str, metavar="YYYY-mm-dd[THH:MM]",
+                      help="Process data up until this date or date-time. Format "
+                           "is YYYY-mm-dd[THH:MM].")
+    parser.add_option("--version", dest="version", action="store_true",
+                      help="Display weewx_rain version number.")
+    parser.add_option("--binding", dest="binding", metavar="BINDING_NAME",
+                      default='wx_binding',
+                      help="The data binding to use. Default is 'wx_binding'.")
+
+    # now we are ready to parse the command line:
+    (options, args) = parser.parse_args()
+
+    # Do a check to see if the user used more than 1 'verb' . More than 1 verb
+    # should be avoided - what did the user really want to do?
+    # first get a list of options actually used
+    options_list = [opt for opt, val in options.__dict__.items() if val is not None]
+    # now a list of the 'dest' settings used
+    dest_used = [opt for opt in options_list if opt in dest_list]
+    # If we have more than 1 entry in dest_used then we have more than 1 'verb'
+    # used. Then inform the user and exit. If only 1 'verb' then carry on.
+    if len(dest_used) > 1:
+        # generate the message but we need to speak 'options' (aka verbs)
+        # not 'dest'
+        # get a dict of {option.dest: option.str} from our universe of options
+        opt_dict = dict((x.dest, x.get_opt_string()) for x in parser.option_list[1:])
+        # now get a list of 'verbs' used
+        verbs_used = [opt_dict[x] for x in dest_used]
+        # get rid of the [ and ]
+        verbs_str = ', '.join(verbs_used)
+        # our exit message
+        exit_str = ("Multiple verbs found in command line %s. Only one verb permitted.\nNothing done. Aborting." %
+                    (verbs_str, ))
+        # now exit with our message
+        sys.exit(exit_str)
+
+    # check weewx version number for compatibility
+    if StrictVersion(weewx.__version__) < StrictVersion(REQUIRED_WEEWX):
+        print "WeeWX %s or greater is required, found %s. Nothing done, exiting." % (REQUIRED_WEEWX,
+                                                                                     weewx.__version__)
+        exit(1)
+
+    # display wee_import version info
+    if options.version:
+        print "weewx_rain version: %s" % WEEWX_RAIN_VERSION
+        exit(0)
+
+    # get config_dict to use
+    config_path, config_dict = weecfg.read_config(options.config_path, args)
+    print "Using configuration file %s" % config_path
+
+    # set syslog level based
+    if int(config_dict.get('debug', 0)):
+        syslog.setlogmask(syslog.LOG_UPTO(syslog.LOG_DEBUG))
+    else:
+        syslog.setlogmask(syslog.LOG_UPTO(syslog.LOG_INFO))
+
+    db_binding = options.binding
+    database = config_dict['DataBindings'][db_binding]['database']
+    print "Using database binding '%s', which is bound to database '%s'" % (db_binding, database)
+
+    if options.show_rain:
+        show_rain(config_dict, db_binding, options)
+
+
+def clear_rain(config_dict, db_binding, options):
+    """Clear selected archive rain data."""
+
+    pass
+
+
+def show_rain(config_dict, db_binding, options):
+    """Display archive rain data."""
+
+    # first get the start and stop timestamps of the period of interest
+    start_ts, stop_ts = process_date(options)
+    # if both start_ts and stop_ts are None default to today
+    if start_ts is None and stop_ts is None:
+        _tspan = weeutil.weeutil.archiveDaySpan(time.time())
+        start_ts = _tspan.start
+        stop_ts = _tspan.stop
+    # obtain a manager object
+    with weewx.manager.open_manager_with_config(config_dict, db_binding) as dbmanager:
+        # initialise a few variables for some stats reporting
+        # number of >0 rain values found
+        _found_rain = 0
+        # number of >0 rainRate values found
+        _found_rain_rate = 0
+        # total rainfall found
+        _rainfall = 0
+        print
+        # now use the start and stop timestamps in a generator to yield a sequence
+        # of archive records
+        for _rec in dbmanager.genBatchRecords(start_ts, stop_ts):
+            if 'rain' in _rec or 'rainRate' in _rec:
+                # do we have >0 rain
+                if _rec['rain'] is not None and _rec['rain'] > 0.0:
+                    # rain >0
+                    # construct a fixed width string to print
+                    _str = "rain:%.2f" % _rec['rain']
+                    _rain_str = "%11s" % _str
+                    # increment the running total rain
+                    _rainfall += _rec['rain']
+                    # increment rain counter
+                    _found_rain += 1
+                else:
+                    # no rain so construct a blank string
+                    _rain_str = "           "
+                if _rec['rainRate'] is not None and _rec['rainRate'] > 0.0:
+                    # rainRate >0
+                    # construct a fixed width string to print
+                    _str = "rainRate:%.2f" % _rec['rainRate']
+                    _rain_rate_str = "%15s" % _str
+                    # increment rainRate counter
+                    _found_rain_rate += 1
+                else:
+                    # no rainRate so construct a blank string
+                    _rain_rate_str = "               "
+
+                # if there is anything to print print it
+                if len(_rain_str.strip()) > 0 or len(_rain_rate_str.strip()) > 0:
+                    print "%s%s%s" % (timestamp_to_string(_rec['dateTime']),
+                                      _rain_str,
+                                      _rain_rate_str)
+        # print an informative message
+        if _found_rain == 0 and _found_rain == 0:
+            # no rain or rainRate data found
+            if start_ts != stop_ts:
+                # different start and stop ts
+                print "No non-zero 'rain' or 'rainRate' entries found from %s" % timestamp_to_string(start_ts)
+                print "to %s" % timestamp_to_string(stop_ts)
+            else:
+                # start ts == stop ts
+                print "No non-zero 'rain' or 'rainRate' entries found for %s" % timestamp_to_string(start_ts)
+        elif _rainfall > 0:
+            # something was found, display an informative summary message
+            # showing rain totals in all supported unit systems
+            # first get the rain units used in the archive and the unit group it
+            # belongs to
+            _unit, _group = weewx.units.getStandardUnitType(_rec['usUnits'], 'rain')
+            # get the total rain as a ValueTuple
+            _found_rain_vt = weewx.units.ValueTuple(_found_rain, _unit, _group)
+            # 'mm' and 'cm' are OK as is but want to shorten 'inch' to 'in' when
+            # printed
+            _display_unit = _unit if _unit != 'inch' else 'in'
+            # string to display for total in native db units
+            _native_found_rain_str = "%0.3f%s" % (_found_rain_vt.value,
+                                                    _display_unit)
+            # we have other units to display in so construct a list to
+            # accumulate all of the display strings
+            _found_rain_str_list = []
+            # iterate over all the supported unit systems but only process
+            # those that are not the native archive units
+            for _name, _system in weewx.units.unit_constants.iteritems():
+                if _system != _rec['usUnits']:
+                    # get the unit and unit group
+                    _conv_units, _conv_group = weewx.units.getStandardUnitType(_system, 'rain')
+                    # convert our total
+                    _conv_rain_vt = weewx.units.convert(_found_rain_vt, _conv_units)
+                    # 'mm' and 'cm' are OK as is but want to shorten 'inch' to
+                    # 'in' when printed
+                    _display_unit = _conv_units if _conv_units != 'inch' else 'in'
+
+                    # string to display in these units
+                    _conv_rain_str = "%0.3f%s" % (_conv_rain_vt.value, _display_unit)
+                    # add it to the list
+                    _found_rain_str_list.append(_conv_rain_str)
+            # construct the rain total string
+            # first the inner brackets
+            _str = " or ".join(_found_rain_str_list)
+            _rain_str = "%s (%s)" % (_native_found_rain_str, _str)
+            # and print the results
+            print
+            print "Total rainfall of %s found in %d records" % (_rain_str,
+                                                                _found_rain)
+            print "from %s to %s" % (timestamp_to_string(start_ts),
+                                     timestamp_to_string(stop_ts))
+
+
+def process_date(options):
+    """Return start and stop timestamps for a given --date or --to/--from"""
+
+    # In processing any --date, --from and --to options we need to derive the
+    # start and stop (inclusive) timestamps of data to be processed. If we have
+    # no --date, --from or --to then set both to None.
+    # First see if we have a valid --date, if not then we look for --from and
+    # --to.
+    if options.date or options.date == "":
+        # there is a --date but is it valid
+        try:
+            if 'T' in options.date:
+                # a time has been specified so first and last ts will be the
+                # same
+                # first decode the --date option as a date-time
+                _first_dt = datetime.datetime.strptime(options.date,
+                                                       "%Y-%m-%dT%H:%M")
+                _last_dt = _first_dt
+            elif options.date == "":
+                # we have --date= so default to today
+                _first_dt = datetime.date.today()
+                _last_dt = _first_dt + datetime.timedelta(days=1)
+            else:
+                # no time specified so first and last will be the start and end
+                # of a day
+                # first decode the --date option as a date only
+                _first_dt = datetime.datetime.strptime(options.date,
+                                                       "%Y-%m-%d")
+                _last_dt = _first_dt + datetime.timedelta(days=1)
+            first_ts = time.mktime(_first_dt.timetuple())
+            last_ts = time.mktime(_last_dt.timetuple())
+        except ValueError:
+            # Could not convert --date. If we have a --date it must be
+            # valid otherwise we can't continue so raise it.
+            _msg = "Invalid --date option specified."
+            raise ValueError(_msg)
+    elif options.date_from or options.date_to or options.date_from == '' or options.date_to == '':
+        # There is a --from and/or a --to, but do we have both and are
+        # they valid.
+        # try --from first
+        try:
+            if 'T' in options.date_from:
+                _from_dt = datetime.datetime.strptime(options.date_from,
+                                                      "%Y-%m-%dT%H:%M")
+            else:
+                _from_dt = datetime.datetime.strptime(options.date_from,
+                                                      "%Y-%m-%d")
+            _from_ts = time.mktime(_from_dt.timetuple())
+        except TypeError:
+            # --from not specified we can't continue so raise it
+            _msg = "Missing --from option. Both --from and --to must be specified."
+            raise TypeError(_msg)
+        except ValueError:
+            # could not convert --from, we can't continue so raise it
+            _msg = "Invalid --from option."
+            raise ValueError(_msg)
+        # try --to
+        try:
+            if 'T' in options.date_to:
+                _to_dt = datetime.datetime.strptime(options.date_to,
+                                                    "%Y-%m-%dT%H:%M")
+            else:
+                _to_dt = datetime.datetime.strptime(options.date_to,
+                                                    "%Y-%m-%d")
+                # since it is just a date we want the end of the day
+                _to_dt += datetime.timedelta(days=1)
+            _to_ts = time.mktime(_to_dt.timetuple())
+        except TypeError:
+            # --to not specified , we can't continue so raise it
+            _msg = "Missing --to option. Both --from and --to must be specified."
+            raise TypeError(_msg)
+        except ValueError:
+            # could not convert --to, we can't continue so raise it
+            _msg = "Invalid --to option."
+            raise ValueError(_msg)
+        # If we made it here we have a _from_ts and _to_ts. Do a simple
+        # error check first.
+        if _from_ts > _to_ts:
+            # from is later than to, raise it
+            _msg = "--from value is later than --to value."
+            raise weewx.ViolatedPrecondition(_msg)
+        first_ts = _from_ts
+        last_ts = _to_ts
+    else:
+        # no --date or --from/--to so we take the default, set all to None
+        first_ts = None
+        last_ts = None
+    return first_ts, last_ts
+
+
+if __name__ == "__main__":
+    main()
