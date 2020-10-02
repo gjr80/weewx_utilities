@@ -10,4 +10,4 @@ I make no warranty that any of the code in this repo will do anything useful or 
 
 ## Support ##
 
-I make no guarantee that I can or will support any of this code, I am happy to answer questions where I can. The best thing is to raise an issue or (preferred) ask a question through the weewx-user Google Group.  
+I make no guarantee that I can or will support any of this code, I am happy to answer questions where I can. My preferred approach is for questions to be asked through the [weewx-user Google Group](https://groups.google.com/g/weewx-user) rather than raising issues in this repo.  
