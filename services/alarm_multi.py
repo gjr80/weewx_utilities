@@ -85,7 +85,7 @@ To enable this service:
 [Engine]
     [[Services]]
         ...
-        report_services = weewx.engine.StdPrint, weewx.engine.StdReport, user.alarm_multi.MyAlarm
+        report_services = weewx.engine.StdPrint, weewx.engine.StdReport, user.alarm_multi.AlarmMulti
 
 3.  restart WeeWX
 
@@ -167,7 +167,7 @@ except ImportError:
 ALARM_MULTI_VERSION = '2.0.0'
 
 
-# Define the MyAlarm class which is inheritted from the base class StdService
+# Define the AlarmMulti class which is inherited from the base class StdService
 class AlarmMulti(weewx.engine.StdService):
     """Service to send an email if any one of multiple expressions evaluate true."""
 
@@ -243,7 +243,7 @@ class AlarmMulti(weewx.engine.StdService):
                         # sound the alarm!
                         # launch in a separate thread so it doesn't block the
                         # main LOOP thread
-                        t = threading.Thread(target=MyAlarm.sound_the_alarm,
+                        t = threading.Thread(target=AlarmMulti.sound_the_alarm,
                                              args=(self, record, self.expression[key], self.subject[key]))
                         t.start()
                         # record when the message went out
@@ -290,7 +290,7 @@ class AlarmMulti(weewx.engine.StdService):
             # search and may be prone to false triggers on similarly named
             # fields but it will do the job.
             # Start with the default list of fields
-            manifest = list(MyAlarm.default_manifest)
+            manifest = list(AlarmMulti.default_manifest)
             # iterate over the archive record keys looking for the key in the
             # alarm expression.
             for key in rec.keys():
